@@ -84,70 +84,68 @@ with st.sidebar:
         horizon_filter = st.multiselect("Time horizon (months)", options=HORIZONS, default=HORIZONS)
         metric_view = st.radio("Metric view", ["mean LTV", "median LTV"])
 
-        filtered = df[(df["plan"].isin(plan_filter)) & (df["source"].isin(source_filter))].copy()
-        if filtered.empty:
-            st.warning("No rows match the current filters.")
-            st.stop()
-        if not horizon_filter:
-            st.warning("Select at least one time horizon.")
-            st.stop()
+if data is not None:
+    filtered = df[(df["plan"].isin(plan_filter)) & (df["source"].isin(source_filter))].copy()
+    if filtered.empty:
+        st.warning("No rows match the current filters.")
+        st.stop()
+    if not horizon_filter:
+        st.warning("Select at least one time horizon.")
+        st.stop()
 
-        statistic = "median" if metric_view == "median LTV" else "mean"
-        res, ltv, paid = compute_ltv_summary(
-            filtered,
-            asof=asof_ts,
-            selected_horizons=horizon_filter,
-            statistic=statistic,
-        )
+    statistic = "median" if metric_view == "median LTV" else "mean"
+    res, ltv, paid = compute_ltv_summary(
+        filtered,
+        asof=asof_ts,
+        selected_horizons=horizon_filter,
+        statistic=statistic,
+    )
 
-        st.subheader("Filter summary")
-        st.json({
-            "rows": len(filtered),
-            "plans": sorted(filtered["plan"].unique().tolist()),
-            "sources": sorted(filtered["source"].unique().tolist()),
-            "horizons": horizon_filter,
-            "as_of": str(asof_ts.date()),
-        })
+    st.subheader("Filter summary")
+    st.json({
+        "rows": len(filtered),
+        "plans": sorted(filtered["plan"].unique().tolist()),
+        "sources": sorted(filtered["source"].unique().tolist()),
+        "horizons": horizon_filter,
+        "as_of": str(asof_ts.date()),
+    })
 
-        h = st.selectbox("Selected comparison horizon", options=horizon_filter, index=min(len(horizon_filter)-1, 0))
+    h = st.selectbox("Selected comparison horizon", options=horizon_filter, index=min(len(horizon_filter)-1, 0))
 
-        ltv_view = res[(res["H"] == h) & (res["plan"] == "all")].set_index("source").sort_values("ltv", ascending=False)
-        st.subheader(f"Top sources at {h} months")
-        st.dataframe(ltv_view[["ltv", "n"]], width="stretch")
+    ltv_view = res[(res["H"] == h) & (res["plan"] == "all")].set_index("source").sort_values("ltv", ascending=False)
+    st.subheader(f"Top sources at {h} months")
+    st.dataframe(ltv_view[["ltv", "n"]], width="stretch")
 
-        bar_data = ltv_view["ltv"].sort_values(ascending=False)
-        st.bar_chart(bar_data)
+    bar_data = ltv_view["ltv"].sort_values(ascending=False)
+    st.bar_chart(bar_data)
 
-        st.subheader("Detailed LTV table")
-        detail = res[(res["H"] == h)].pivot(index="source", columns="plan", values="ltv").round(2)
-        st.dataframe(detail, width="stretch")
+    st.subheader("Detailed LTV table")
+    detail = res[(res["H"] == h)].pivot(index="source", columns="plan", values="ltv").round(2)
+    st.dataframe(detail, width="stretch")
 
-        st.subheader("Summary metrics")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Average charge / subscriber", round(float(paid.sum(axis=1).mean()), 2))
-        summary_stat_label = "Average" if statistic == "mean" else "Median"
-        col2.metric(
-            f"{h}-month {summary_stat_label.lower()} source LTV",
-            round(float(ltv_view["ltv"].agg(statistic)), 2),
-        )
-        col3.metric("Largest source", ltv_view.index[0] if not ltv_view.empty else "N/A")
+    st.subheader("Summary metrics")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Average charge / subscriber", round(float(paid.sum(axis=1).mean()), 2))
+    summary_stat_label = "Average" if statistic == "mean" else "Median"
+    col2.metric(
+        f"{h}-month {summary_stat_label.lower()} source LTV",
+        round(float(ltv_view["ltv"].agg(statistic)), 2),
+    )
+    col3.metric("Largest source", ltv_view.index[0] if not ltv_view.empty else "N/A")
 
-        st.markdown(
-            "This dashboard compares expected customer lifetime value by acquisition source under the current monthly/annual subscription assumptions."
-        )
+    st.markdown(
+        "This dashboard compares expected customer lifetime value by acquisition source under the current monthly/annual subscription assumptions."
+    )
 
-        st.subheader("LTV trajectory by source")
-        horizon_table = res[res["plan"] == "all"].pivot(index="source", columns="H", values="ltv").round(1)
-        st.line_chart(horizon_table)
+    st.subheader("LTV trajectory by source")
+    horizon_table = res[res["plan"] == "all"].pivot(index="source", columns="H", values="ltv").round(1)
+    st.line_chart(horizon_table)
 
-        st.download_button(
-            label="Download current LTV table",
-            data=res.to_csv(index=False).encode("utf-8"),
-            file_name="ltv_compare.csv",
-            mime="text/csv",
-        )
-    else:
-        st.info("Upload a file from the sidebar, or place subscriptions.csv in the project root to use the default dataset.")
-
-if data is None:
+    st.download_button(
+        label="Download current LTV table",
+        data=res.to_csv(index=False).encode("utf-8"),
+        file_name="ltv_compare.csv",
+        mime="text/csv",
+    )
+else:
     st.info("The dashboard is ready. Choose a CSV in the sidebar to compare LTV by acquisition source.")
