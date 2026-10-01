@@ -1,0 +1,153 @@
+import matplotlib
+
+matplotlib.use("Agg")
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+
+from utils import ASOF, HORIZONS, build_eligibility, mature_at, revenue_at
+
+
+st.set_page_config(
+    page_title="LTV Source Comparison",
+    page_icon="📈",
+    layout="wide",
+)
+
+
+def normalize_dataframe(df):
+    df = df.copy()
+    if "plan" not in df.columns:
+        raise ValueError("The file must contain a 'plan' column.")
+    if "source" not in df.columns:
+        df["step"] = np.where(df["plan"] == "annual", 12, 1)
+        df["price"] = np.where(df["plan"] == "annual", 150, 15)
+        df["source"] = np.where(
+            df["channel"] == "paid_social",
+            "paid_social/" + df["utm_campaign"].fillna(""),
+            df["channel"],
+        )
+    return df
+
+
+def compute_ltv_summary(df, asof=ASOF, selected_horizons=None, statistic="mean"):
+    if statistic not in {"mean", "median"}:
+        raise ValueError("statistic must be 'mean' or 'median'.")
+
+    failed = (df["end_reason"] == "payment_failed").to_numpy()
+    elig = build_eligibility(df, asof=asof)
+    paid = elig[:, :38].copy()
+    paid[failed] = elig[failed, :38] & elig[failed, 1:39]
+
+    if selected_horizons is None:
+        selected_horizons = HORIZONS
+
+    rows = []
+    for H in selected_horizons:
+        m = mature_at(df, H, asof=asof)
+        t = pd.DataFrame({
+            "source": df["source"][m],
+            "plan": df["plan"][m],
+            "rev": revenue_at(df, paid, H)[m],
+        })
+        allp = t.groupby("source").rev.agg(ltv=statistic, n="size").assign(plan="all")
+        byp = t.groupby(["source", "plan"]).rev.agg(ltv=statistic, n="size").reset_index().set_index("source")
+        out = pd.concat([allp, byp]).reset_index().assign(H=H)
+        rows.append(out)
+
+    res = pd.concat(rows, ignore_index=True)
+    ltv = res[res["plan"] == "all"].pivot(index="source", columns="H", values="ltv").round(1)
+    return res, ltv, paid
+
+
+st.title("Lifetime Value by Acquisition Source")
+st.caption("Compare LTV across acquisition sources, plan types, and time horizons for a subscription business.")
+
+with st.sidebar:
+    st.header("Controls")
+    uploaded_file = st.file_uploader("Upload subscriptions CSV", type=["csv"])
+    if uploaded_file is not None:
+        data = pd.read_csv(uploaded_file, parse_dates=["created_at", "canceled_at", "ended_at"])
+    else:
+        try:
+            data = pd.read_csv("subscriptions.csv", parse_dates=["created_at", "canceled_at", "ended_at"])
+        except FileNotFoundError:
+            data = None
+
+    if data is not None:
+        df = normalize_dataframe(data)
+        asof = st.date_input("As-of date", value=pd.Timestamp(ASOF).date())
+        asof_ts = pd.Timestamp(asof)
+        plan_filter = st.multiselect("Plan", sorted(df["plan"].dropna().unique().tolist()), default=sorted(df["plan"].dropna().unique().tolist()))
+        source_filter = st.multiselect("Acquisition source", sorted(df["source"].dropna().unique().tolist()), default=sorted(df["source"].dropna().unique().tolist()))
+        horizon_filter = st.multiselect("Time horizon (months)", options=HORIZONS, default=HORIZONS)
+        metric_view = st.radio("Metric view", ["mean LTV", "median LTV"])
+
+        filtered = df[(df["plan"].isin(plan_filter)) & (df["source"].isin(source_filter))].copy()
+        if filtered.empty:
+            st.warning("No rows match the current filters.")
+            st.stop()
+        if not horizon_filter:
+            st.warning("Select at least one time horizon.")
+            st.stop()
+
+        statistic = "median" if metric_view == "median LTV" else "mean"
+        res, ltv, paid = compute_ltv_summary(
+            filtered,
+            asof=asof_ts,
+            selected_horizons=horizon_filter,
+            statistic=statistic,
+        )
+
+        st.subheader("Filter summary")
+        st.json({
+            "rows": len(filtered),
+            "plans": sorted(filtered["plan"].unique().tolist()),
+            "sources": sorted(filtered["source"].unique().tolist()),
+            "horizons": horizon_filter,
+            "as_of": str(asof_ts.date()),
+        })
+
+        h = st.selectbox("Selected comparison horizon", options=horizon_filter, index=min(len(horizon_filter)-1, 0))
+
+        ltv_view = res[(res["H"] == h) & (res["plan"] == "all")].set_index("source").sort_values("ltv", ascending=False)
+        st.subheader(f"Top sources at {h} months")
+        st.dataframe(ltv_view[["ltv", "n"]], width="stretch")
+
+        bar_data = ltv_view["ltv"].sort_values(ascending=False)
+        st.bar_chart(bar_data)
+
+        st.subheader("Detailed LTV table")
+        detail = res[(res["H"] == h)].pivot(index="source", columns="plan", values="ltv").round(2)
+        st.dataframe(detail, width="stretch")
+
+        st.subheader("Summary metrics")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Average charge / subscriber", round(float(paid.sum(axis=1).mean()), 2))
+        summary_stat_label = "Average" if statistic == "mean" else "Median"
+        col2.metric(
+            f"{h}-month {summary_stat_label.lower()} source LTV",
+            round(float(ltv_view["ltv"].agg(statistic)), 2),
+        )
+        col3.metric("Largest source", ltv_view.index[0] if not ltv_view.empty else "N/A")
+
+        st.markdown(
+            "This dashboard compares expected customer lifetime value by acquisition source under the current monthly/annual subscription assumptions."
+        )
+
+        st.subheader("LTV trajectory by source")
+        horizon_table = res[res["plan"] == "all"].pivot(index="source", columns="H", values="ltv").round(1)
+        st.line_chart(horizon_table)
+
+        st.download_button(
+            label="Download current LTV table",
+            data=res.to_csv(index=False).encode("utf-8"),
+            file_name="ltv_compare.csv",
+            mime="text/csv",
+        )
+    else:
+        st.info("Upload a file from the sidebar, or place subscriptions.csv in the project root to use the default dataset.")
+
+if data is None:
+    st.info("The dashboard is ready. Choose a CSV in the sidebar to compare LTV by acquisition source.")

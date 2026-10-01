@@ -1,0 +1,6 @@
+pandas>=2.2,<3
+numpy>=1.26,<3
+matplotlib>=3.8,<4
+lifelines>=0.29,<1
+streamlit>=1.64,<2
+pytest>=8,<9
