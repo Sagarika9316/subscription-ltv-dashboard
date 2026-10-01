@@ -179,6 +179,7 @@ if data is not None:
     })
 
     h = st.selectbox("Selected comparison horizon", options=available_horizons)
+    horizon_unit = "month" if h == 1 else "months"
 
     ltv_view = res[(res["H"] == h) & (res["plan"] == "all")].set_index("source").sort_values("ltv", ascending=False)
     intervals = source_ltv_confidence_intervals(
@@ -201,16 +202,6 @@ if data is not None:
             cac_by_source=cac_inputs,
         ).set_index("source")
         ltv_view = ltv_view.join(economics[["cac", "ltv_cac"]]).join(payback)
-
-    st.subheader(f"Observed LTV by source at {h} months")
-    display_columns = ["ltv", "ci_low", "ci_high", "n"]
-    column_names = {
-        "ltv": "LTV",
-        "ci_low": f"{confidence_level:.0%} CI lower",
-        "ci_high": f"{confidence_level:.0%} CI upper",
-        "n": "Customers",
-    }
-    if has_cac:
         payback_display = pd.Series("", index=ltv_view.index, dtype="object")
         costed = ltv_view["cac"].notna()
         payback_display.loc[costed] = "Not reached"
@@ -219,20 +210,61 @@ if data is not None:
             lambda months: f"{int(months)} mo"
         )
         ltv_view["payback"] = payback_display
-        display_columns.extend(["cac", "ltv_cac", "payback"])
-        column_names.update(
-            {
-                "cac": "CAC",
-                "ltv_cac": "LTV:CAC",
-                "payback": "Observed payback",
-            }
+    else:
+        ltv_view["cac"] = np.nan
+        ltv_view["ltv_cac"] = np.nan
+        ltv_view["payback"] = ""
+
+    forecast = survival_ltv_forecast(filtered, asof_ts, available_horizons)
+    forecast_view = forecast[forecast["H"] == h].set_index("source")
+    if forecast_view.empty:
+        ltv_view["forecast_ltv"] = np.nan
+        ltv_view["forecast_n"] = np.nan
+    else:
+        ltv_view = ltv_view.join(
+            forecast_view[["forecast_ltv", "n"]].rename(columns={"n": "forecast_n"})
         )
 
-    st.dataframe(ltv_view[display_columns].rename(columns=column_names), width="stretch")
-    if has_cac:
-        st.caption(
-            "Payback is the first selected mature horizon where mean observed revenue covers CAC; it is not a forecast."
-        )
+    st.subheader(f"Model comparison at {h} {horizon_unit}")
+    comparison = ltv_view[
+        [
+            "ltv",
+            "ci_low",
+            "ci_high",
+            "n",
+            "cac",
+            "ltv_cac",
+            "payback",
+            "forecast_ltv",
+            "forecast_n",
+        ]
+    ].rename(
+        columns={
+            "ltv": "Observed LTV",
+            "ci_low": f"{confidence_level:.0%} CI lower",
+            "ci_high": f"{confidence_level:.0%} CI upper",
+            "n": "Observed N",
+            "cac": "CAC",
+            "ltv_cac": "LTV:CAC",
+            "payback": "Observed payback",
+            "forecast_ltv": "Forecast LTV",
+            "forecast_n": "Forecast N",
+        }
+    )
+    st.dataframe(comparison, width="stretch")
+    st.caption("Blank CAC columns mean no positive CAC has been entered. Blank forecast cells mean one or more plan segments lack sufficient follow-up.")
+
+    st.markdown("**Model assumptions and sample coverage**")
+    observed_notes, economics_notes, forecast_notes = st.columns(3)
+    observed_notes.caption(
+        f"Observed LTV uses fully mature customers at {h} months; interval is bootstrap-based. Observed N is shown per source."
+    )
+    economics_notes.caption(
+        "LTV:CAC uses entered source-level costs. Payback is the first selected mature horizon where mean observed revenue covers CAC."
+    )
+    forecast_notes.caption(
+        "Forecast uses Kaplan–Meier retention by source and plan; Forecast N counts customers in supported segments and is not realized LTV."
+    )
 
     bar_data = ltv_view["ltv"].sort_values(ascending=False)
     st.bar_chart(bar_data)
@@ -272,24 +304,15 @@ if data is not None:
     )
 
     st.divider()
-    st.subheader("Retention-based forecast")
+    st.subheader("Forecast by source")
     st.caption(
         "Modelled expected revenue uses Kaplan–Meier retention and observed billing prices. "
         "Forecasts are limited to horizons within observed follow-up and are not realized LTV."
     )
-    forecast = survival_ltv_forecast(filtered, asof_ts, available_horizons)
-    forecast_view = forecast[forecast["H"] == h].set_index("source").sort_values(
-        "forecast_ltv", ascending=False
-    )
+    forecast_view = forecast_view.sort_values("forecast_ltv", ascending=False)
     if forecast_view.empty:
         st.info("There is not enough observed follow-up for this source and horizon.")
     else:
-        st.dataframe(
-            forecast_view[["forecast_ltv", "n"]].rename(
-                columns={"forecast_ltv": "Forecast LTV", "n": "Customers"}
-            ),
-            width="stretch",
-        )
         st.bar_chart(forecast_view["forecast_ltv"])
 else:
     st.info("The dashboard is ready. Choose a CSV in the sidebar to compare LTV by acquisition source.")
