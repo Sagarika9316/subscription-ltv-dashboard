@@ -81,11 +81,25 @@ with st.sidebar:
         asof_ts = pd.Timestamp(asof)
         plan_filter = st.multiselect("Plan", sorted(df["plan"].dropna().unique().tolist()), default=sorted(df["plan"].dropna().unique().tolist()))
         source_filter = st.multiselect("Acquisition source", sorted(df["source"].dropna().unique().tolist()), default=sorted(df["source"].dropna().unique().tolist()))
+        cohort_start_default = df["created_at"].min().date()
+        cohort_end_default = df["created_at"].max().date()
+        cohort_range = st.date_input(
+            "Signup cohort dates",
+            value=(cohort_start_default, cohort_end_default),
+            min_value=cohort_start_default,
+            max_value=cohort_end_default,
+        )
         horizon_filter = st.multiselect("Time horizon (months)", options=HORIZONS, default=HORIZONS)
         metric_view = st.radio("Metric view", ["mean LTV", "median LTV"])
 
 if data is not None:
-    filtered = df[(df["plan"].isin(plan_filter)) & (df["source"].isin(source_filter))].copy()
+    cohort_start, cohort_end = cohort_range
+    filtered = df[
+        (df["plan"].isin(plan_filter))
+        & (df["source"].isin(source_filter))
+        & (df["created_at"] >= pd.Timestamp(cohort_start))
+        & (df["created_at"] < pd.Timestamp(cohort_end) + pd.DateOffset(days=1))
+    ].copy()
     if filtered.empty:
         st.warning("No rows match the current filters.")
         st.stop()
@@ -101,16 +115,26 @@ if data is not None:
         statistic=statistic,
     )
 
+    available_horizons = [
+        horizon
+        for horizon in horizon_filter
+        if ((res["H"] == horizon) & (res["plan"] == "all")).any()
+    ]
+    if not available_horizons:
+        st.warning("No subscribers in this signup cohort have reached the selected time horizons yet.")
+        st.stop()
+
     st.subheader("Filter summary")
     st.json({
         "rows": len(filtered),
         "plans": sorted(filtered["plan"].unique().tolist()),
         "sources": sorted(filtered["source"].unique().tolist()),
-        "horizons": horizon_filter,
+        "signup_cohort": [str(cohort_start), str(cohort_end)],
+        "horizons_with_mature_data": available_horizons,
         "as_of": str(asof_ts.date()),
     })
 
-    h = st.selectbox("Selected comparison horizon", options=horizon_filter, index=min(len(horizon_filter)-1, 0))
+    h = st.selectbox("Selected comparison horizon", options=available_horizons)
 
     ltv_view = res[(res["H"] == h) & (res["plan"] == "all")].set_index("source").sort_values("ltv", ascending=False)
     st.subheader(f"Top sources at {h} months")
@@ -125,11 +149,14 @@ if data is not None:
 
     st.subheader("Summary metrics")
     col1, col2, col3 = st.columns(3)
-    col1.metric("Average charge / subscriber", round(float(paid.sum(axis=1).mean()), 2))
-    summary_stat_label = "Average" if statistic == "mean" else "Median"
+    mature_mask = mature_at(filtered, h, asof=asof_ts)
+    mature_ltv = revenue_at(filtered, paid, h)[mature_mask]
+    overall_ltv = mature_ltv.mean() if statistic == "mean" else np.median(mature_ltv)
+    summary_stat_label = "Mean" if statistic == "mean" else "Median"
+    col1.metric("Mature subscribers", f"{len(mature_ltv):,}")
     col2.metric(
-        f"{h}-month {summary_stat_label.lower()} source LTV",
-        round(float(ltv_view["ltv"].agg(statistic)), 2),
+        f"{h}-month {summary_stat_label.lower()} LTV",
+        round(float(overall_ltv), 2),
     )
     col3.metric("Largest source", ltv_view.index[0] if not ltv_view.empty else "N/A")
 
@@ -138,7 +165,9 @@ if data is not None:
     )
 
     st.subheader("LTV trajectory by source")
-    horizon_table = res[res["plan"] == "all"].pivot(index="source", columns="H", values="ltv").round(1)
+    horizon_table = res[
+        (res["plan"] == "all") & res["H"].isin(available_horizons)
+    ].pivot(index="source", columns="H", values="ltv").round(1)
     st.line_chart(horizon_table)
 
     st.download_button(
