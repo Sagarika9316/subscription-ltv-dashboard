@@ -72,6 +72,14 @@ st.caption("Compare LTV across acquisition sources, plan types, and time horizon
 
 with st.sidebar:
     st.header("Controls")
+    st.markdown(
+        "**Observed LTV + interval**  \n"
+        "How much revenue did mature customers generate by this horizon, and how uncertain is the estimate?\n\n"
+        "**CAC + payback**  \n"
+        "How much LTV per acquisition dollar, and when does observed revenue cover CAC?\n\n"
+        "**Retention forecast**  \n"
+        "What cumulative revenue might historical retention imply through the selected horizon?"
+    )
     uploaded_file = st.file_uploader("Upload subscriptions CSV", type=["csv"])
     if uploaded_file is not None:
         data = pd.read_csv(uploaded_file, parse_dates=["created_at", "canceled_at", "ended_at"])
@@ -104,7 +112,7 @@ with st.sidebar:
             format_func=lambda value: f"{value:.0%}",
         )
         with st.expander("Acquisition costs (CAC)"):
-            st.caption("Enter cost per acquired customer for each source.")
+            st.caption("Enter CAC per customer in the same currency as revenue. Leave unknown sources blank.")
             cac_sources = sorted(df["source"].dropna().unique().tolist())
             cac_defaults = pd.DataFrame(
                 {
