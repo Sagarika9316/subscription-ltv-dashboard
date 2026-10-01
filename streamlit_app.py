@@ -6,6 +6,12 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from ltv_models import (
+    add_ltv_cac_ratio,
+    estimate_observed_payback,
+    source_ltv_confidence_intervals,
+    survival_ltv_forecast,
+)
 from utils import ASOF, HORIZONS, build_eligibility, mature_at, revenue_at
 
 
@@ -91,6 +97,36 @@ with st.sidebar:
         )
         horizon_filter = st.multiselect("Time horizon (months)", options=HORIZONS, default=HORIZONS)
         metric_view = st.radio("Metric view", ["mean LTV", "median LTV"])
+        confidence_level = st.select_slider(
+            "Confidence interval",
+            options=[0.90, 0.95, 0.99],
+            value=0.95,
+            format_func=lambda value: f"{value:.0%}",
+        )
+        with st.expander("Acquisition costs (CAC)"):
+            st.caption("Enter cost per acquired customer for each source.")
+            cac_sources = sorted(df["source"].dropna().unique().tolist())
+            cac_defaults = pd.DataFrame(
+                {
+                    "source": cac_sources,
+                    "cac": pd.Series(index=range(len(cac_sources)), dtype="float64"),
+                }
+            )
+            cac_inputs = st.data_editor(
+                cac_defaults,
+                hide_index=True,
+                num_rows="fixed",
+                key="cac_by_source_editor",
+                column_config={
+                    "source": st.column_config.TextColumn("Source", disabled=True),
+                    "cac": st.column_config.NumberColumn(
+                        "CAC per customer",
+                        min_value=0.0,
+                        step=1.0,
+                        format="%.2f",
+                    ),
+                },
+            )
 
 if data is not None:
     cohort_start, cohort_end = cohort_range
@@ -137,8 +173,58 @@ if data is not None:
     h = st.selectbox("Selected comparison horizon", options=available_horizons)
 
     ltv_view = res[(res["H"] == h) & (res["plan"] == "all")].set_index("source").sort_values("ltv", ascending=False)
-    st.subheader(f"Top sources at {h} months")
-    st.dataframe(ltv_view[["ltv", "n"]], width="stretch")
+    intervals = source_ltv_confidence_intervals(
+        filtered,
+        paid,
+        h,
+        asof=asof_ts,
+        statistic=statistic,
+        confidence=confidence_level,
+    ).set_index("source")
+    ltv_view = ltv_view.join(intervals)
+    has_cac = pd.to_numeric(cac_inputs["cac"], errors="coerce").gt(0).any()
+    if has_cac:
+        economics = add_ltv_cac_ratio(ltv_view.reset_index(), cac_inputs).set_index("source")
+        payback = estimate_observed_payback(
+            filtered,
+            paid,
+            asof=asof_ts,
+            horizons=available_horizons,
+            cac_by_source=cac_inputs,
+        ).set_index("source")
+        ltv_view = ltv_view.join(economics[["cac", "ltv_cac"]]).join(payback)
+
+    st.subheader(f"Observed LTV by source at {h} months")
+    display_columns = ["ltv", "ci_low", "ci_high", "n"]
+    column_names = {
+        "ltv": "LTV",
+        "ci_low": f"{confidence_level:.0%} CI lower",
+        "ci_high": f"{confidence_level:.0%} CI upper",
+        "n": "Customers",
+    }
+    if has_cac:
+        payback_display = pd.Series("", index=ltv_view.index, dtype="object")
+        costed = ltv_view["cac"].notna()
+        payback_display.loc[costed] = "Not reached"
+        reached = costed & ltv_view["payback_months"].notna()
+        payback_display.loc[reached] = ltv_view.loc[reached, "payback_months"].map(
+            lambda months: f"{int(months)} mo"
+        )
+        ltv_view["payback"] = payback_display
+        display_columns.extend(["cac", "ltv_cac", "payback"])
+        column_names.update(
+            {
+                "cac": "CAC",
+                "ltv_cac": "LTV:CAC",
+                "payback": "Observed payback",
+            }
+        )
+
+    st.dataframe(ltv_view[display_columns].rename(columns=column_names), width="stretch")
+    if has_cac:
+        st.caption(
+            "Payback is the first selected mature horizon where mean observed revenue covers CAC; it is not a forecast."
+        )
 
     bar_data = ltv_view["ltv"].sort_values(ascending=False)
     st.bar_chart(bar_data)
@@ -164,7 +250,7 @@ if data is not None:
         "This dashboard compares expected customer lifetime value by acquisition source under the current monthly/annual subscription assumptions."
     )
 
-    st.subheader("LTV trajectory by source")
+    st.subheader("Observed LTV trajectory")
     horizon_table = res[
         (res["plan"] == "all") & res["H"].isin(available_horizons)
     ].pivot(index="source", columns="H", values="ltv").round(1)
@@ -176,5 +262,26 @@ if data is not None:
         file_name="ltv_compare.csv",
         mime="text/csv",
     )
+
+    st.divider()
+    st.subheader("Retention-based forecast")
+    st.caption(
+        "Modelled expected revenue uses Kaplan–Meier retention and observed billing prices. "
+        "Forecasts are limited to horizons within observed follow-up and are not realized LTV."
+    )
+    forecast = survival_ltv_forecast(filtered, asof_ts, available_horizons)
+    forecast_view = forecast[forecast["H"] == h].set_index("source").sort_values(
+        "forecast_ltv", ascending=False
+    )
+    if forecast_view.empty:
+        st.info("There is not enough observed follow-up for this source and horizon.")
+    else:
+        st.dataframe(
+            forecast_view[["forecast_ltv", "n"]].rename(
+                columns={"forecast_ltv": "Forecast LTV", "n": "Customers"}
+            ),
+            width="stretch",
+        )
+        st.bar_chart(forecast_view["forecast_ltv"])
 else:
     st.info("The dashboard is ready. Choose a CSV in the sidebar to compare LTV by acquisition source.")
