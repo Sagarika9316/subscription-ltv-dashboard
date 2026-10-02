@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from app import build_eligibility
-from cohort_models import cohort_retention_matrix
+from cohort_models import cohort_churn_summary, cohort_retention_matrix
 from ltv_models import (
     add_ltv_cac_ratio,
     bootstrap_confidence_interval,
@@ -452,3 +452,34 @@ def test_cohort_matrix_splits_mature_churn_reasons_and_censors_active_users():
     assert month_two["payment_failure_churned"] == 1
     assert month_two["other_churned"] == 1
     assert month_two["retained"] == 1
+
+
+def test_standalone_cohort_churn_summary_has_stable_reason_columns():
+    created = pd.Timestamp("2024-01-01")
+    df = pd.DataFrame(
+        {
+            "source": ["email"] * 4,
+            "plan": ["monthly"] * 4,
+            "created_at": [created] * 4,
+            "ended_at": [
+                pd.Timestamp("2024-01-30"),
+                pd.Timestamp("2024-02-01"),
+                pd.Timestamp("2024-02-15"),
+                pd.NaT,
+            ],
+            "end_reason": ["voluntary", "payment_failed", "other", None],
+        }
+    )
+
+    result = cohort_churn_summary(df, pd.Timestamp("2024-03-01"), [1, 2])
+    month_one = result[result["age_month"] == 1].iloc[0]
+    month_two = result[result["age_month"] == 2].iloc[0]
+
+    assert month_one["matured"] == 4
+    assert month_one["churned"] == 1
+    assert month_one["payment_failure_churned"] == 0
+    assert month_two["churned"] == 3
+    assert month_two["voluntary_churned"] == 1
+    assert month_two["payment_failure_churned"] == 1
+    assert month_two["other_churned"] == 1
+    assert month_two["retention"] == 0.25

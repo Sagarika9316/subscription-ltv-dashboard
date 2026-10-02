@@ -85,3 +85,78 @@ def cohort_retention_matrix(df, asof, max_age=12, min_customers=1):
             "churn_rate",
         ],
     )
+
+
+def cohort_churn_summary(df, asof, horizons=(1, 3, 6, 12), min_customers=1):
+    required = {"source", "plan", "created_at", "ended_at"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {', '.join(sorted(missing))}")
+    if min_customers < 1:
+        raise ValueError("min_customers must be positive.")
+
+    columns = [
+        "source",
+        "plan",
+        "age_month",
+        "matured",
+        "retained",
+        "churned",
+        "voluntary_churned",
+        "payment_failure_churned",
+        "other_churned",
+        "retention",
+        "churn_rate",
+    ]
+    asof = pd.Timestamp(asof)
+    data = df[
+        df["created_at"].notna()
+        & (df["created_at"] <= asof)
+        & df["source"].notna()
+        & df["plan"].notna()
+    ].copy()
+    if "end_reason" in data:
+        data["end_reason"] = (
+            data["end_reason"].fillna("").astype(str).str.strip().str.lower()
+        )
+    else:
+        data["end_reason"] = ""
+
+    rows = []
+    for (source, plan), group in data.groupby(["source", "plan"], sort=True):
+        for age in sorted(set(horizons)):
+            if age < 0:
+                raise ValueError("horizons must be non-negative.")
+            checkpoint = group["created_at"] + pd.DateOffset(months=age)
+            mature = checkpoint <= asof
+            matured = int(mature.sum())
+            if matured < min_customers:
+                continue
+
+            ended = group["ended_at"]
+            churned_mask = ended.notna() & (ended < checkpoint) & mature
+            churned = int(churned_mask.sum())
+            voluntary = int(
+                (churned_mask & group["end_reason"].eq("voluntary")).sum()
+            )
+            payment_failure = int(
+                (churned_mask & group["end_reason"].eq("payment_failed")).sum()
+            )
+            retained = matured - churned
+            rows.append(
+                {
+                    "source": source,
+                    "plan": plan,
+                    "age_month": age,
+                    "matured": matured,
+                    "retained": retained,
+                    "churned": churned,
+                    "voluntary_churned": voluntary,
+                    "payment_failure_churned": payment_failure,
+                    "other_churned": churned - voluntary - payment_failure,
+                    "retention": retained / matured,
+                    "churn_rate": churned / matured,
+                }
+            )
+
+    return pd.DataFrame(rows, columns=columns)

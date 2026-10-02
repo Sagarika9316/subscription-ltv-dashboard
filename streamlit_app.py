@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 from lifelines.exceptions import ConvergenceError
 
-from cohort_models import cohort_retention_matrix
+from cohort_models import cohort_churn_summary, cohort_retention_matrix
 from ltv_models import (
     add_ltv_cac_ratio,
     estimate_observed_payback,
@@ -499,36 +499,15 @@ if data is not None:
             "and counted as retained through their observable age, not as churn. Terminations on the exact "
             "checkpoint date count as retained at that checkpoint."
         )
-        churn_ages = retention[retention["age_month"].isin([1, 3, 6, 12])]
-        if churn_ages.empty:
+        churn_summary = cohort_churn_summary(
+            cohort_data,
+            asof=asof_ts,
+            horizons=[1, 3, 6, 12],
+            min_customers=min_users,
+        )
+        if churn_summary.empty:
             st.info("No selected source/plan cohorts have mature observations at months 1, 3, 6, or 12.")
         else:
-            churn_summary = (
-                churn_ages.groupby(["source", "plan", "age_month"], as_index=False)
-                .agg(
-                    matured=("matured", "sum"),
-                    retained=("retained", "sum"),
-                    churned=("churned", "sum"),
-                    voluntary=("voluntary_churned", "sum"),
-                    payment_failure=("payment_failure_churned", "sum"),
-                    other=("other_churned", "sum"),
-                )
-            )
-            churn_summary["retention_rate"] = (
-                churn_summary["retained"] / churn_summary["matured"]
-            )
-            churn_summary["churn_rate"] = (
-                churn_summary["churned"] / churn_summary["matured"]
-            )
-            churn_summary["voluntary_rate"] = (
-                churn_summary["voluntary"] / churn_summary["matured"]
-            )
-            churn_summary["payment_failure_rate"] = (
-                churn_summary["payment_failure"] / churn_summary["matured"]
-            )
-            churn_summary["other_rate"] = (
-                churn_summary["other"] / churn_summary["matured"]
-            )
             churn_summary = churn_summary.rename(
                 columns={
                     "source": "Source",
@@ -537,22 +516,16 @@ if data is not None:
                     "matured": "Matured customers",
                     "retained": "Retained customers",
                     "churned": "Churned customers",
-                    "voluntary": "Voluntary churned",
-                    "payment_failure": "Payment-failure churned",
-                    "other": "Other/unknown churned",
-                    "retention_rate": "Retention %",
+                    "voluntary_churned": "Voluntary churned",
+                    "payment_failure_churned": "Payment-failure churned",
+                    "other_churned": "Other/unknown churned",
+                    "retention": "Retention %",
                     "churn_rate": "Total churn %",
-                    "voluntary_rate": "Voluntary churn %",
-                    "payment_failure_rate": "Payment-failure churn %",
-                    "other_rate": "Other/unknown churn %",
                 }
             )
             percentage_columns = [
                 "Retention %",
                 "Total churn %",
-                "Voluntary churn %",
-                "Payment-failure churn %",
-                "Other/unknown churn %",
             ]
             st.dataframe(
                 churn_summary,
