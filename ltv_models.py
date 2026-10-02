@@ -71,6 +71,7 @@ def add_ltv_cac_ratio(ltv_by_source, cac_by_source):
 
     result = ltv_by_source.merge(costs, on="source", how="left")
     result["ltv_cac"] = result["ltv"] / result["cac"]
+    result["ltv_minus_cac"] = result["ltv"] - result["cac"]
     return result
 
 

@@ -80,6 +80,7 @@ def test_unit_economics_calculates_ltv_cac_and_observed_payback():
     )
 
     assert economics.loc[0, "ltv_cac"] == 1.5
+    assert economics.loc[0, "ltv_minus_cac"] == 15
     assert payback.loc[0, "payback_months"] == 3
 
 

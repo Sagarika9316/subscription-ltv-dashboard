@@ -93,7 +93,16 @@ with st.sidebar:
         df = normalize_dataframe(data)
         asof = st.date_input("As-of date", value=pd.Timestamp(ASOF).date())
         asof_ts = pd.Timestamp(asof)
-        plan_filter = st.multiselect("Plan", sorted(df["plan"].dropna().unique().tolist()), default=sorted(df["plan"].dropna().unique().tolist()))
+        plan_options = sorted(df["plan"].dropna().unique().tolist())
+        plan_choice = st.selectbox(
+            "Plan type",
+            ["All"] + [plan.title() for plan in plan_options],
+        )
+        plan_filter = (
+            plan_options
+            if plan_choice == "All"
+            else [plan for plan in plan_options if plan.title() == plan_choice]
+        )
         source_filter = st.multiselect("Acquisition source", sorted(df["source"].dropna().unique().tolist()), default=sorted(df["source"].dropna().unique().tolist()))
         cohort_start_default = df["created_at"].min().date()
         cohort_end_default = df["created_at"].max().date()
@@ -103,7 +112,33 @@ with st.sidebar:
             min_value=cohort_start_default,
             max_value=cohort_end_default,
         )
-        horizon_filter = st.multiselect("Time horizon (months)", options=HORIZONS, default=HORIZONS)
+        cohort_start, cohort_end = cohort_range
+        horizon_candidates = df[
+            df["plan"].isin(plan_filter)
+            & df["source"].isin(source_filter)
+            & (df["created_at"] >= pd.Timestamp(cohort_start))
+            & (df["created_at"] < pd.Timestamp(cohort_end) + pd.DateOffset(days=1))
+        ]
+        horizon_filter = [
+            horizon
+            for horizon in HORIZONS
+            if mature_at(horizon_candidates, horizon, asof=asof_ts).any()
+        ]
+        if horizon_filter:
+            selected_horizon = 12 if 12 in horizon_filter else horizon_filter[-1]
+            h = st.select_slider(
+                "Time horizon (months)",
+                options=horizon_filter,
+                value=selected_horizon,
+            )
+        else:
+            h = None
+        min_users = st.slider(
+            "Minimum mature customers per source",
+            min_value=1,
+            max_value=1000,
+            value=1,
+        )
         metric_view = st.radio("Metric view", ["mean LTV", "median LTV"])
         confidence_level = st.select_slider(
             "Confidence interval",
@@ -148,7 +183,17 @@ if data is not None:
         st.warning("No rows match the current filters.")
         st.stop()
     if not horizon_filter:
-        st.warning("Select at least one time horizon.")
+        st.warning("No customers in this selection have reached a supported time horizon.")
+        st.stop()
+    if h is None:
+        st.warning("Choose filters that include customers mature at a supported horizon.")
+        st.stop()
+
+    mature_counts = filtered.loc[mature_at(filtered, h, asof=asof_ts)].groupby("source").size()
+    qualified_sources = mature_counts[mature_counts >= min_users].index
+    filtered = filtered[filtered["source"].isin(qualified_sources)].copy()
+    if filtered.empty:
+        st.warning(f"No sources have at least {min_users} mature customers at {h} months.")
         st.stop()
 
     statistic = "median" if metric_view == "median LTV" else "mean"
@@ -178,7 +223,9 @@ if data is not None:
         "as_of": str(asof_ts.date()),
     })
 
-    h = st.selectbox("Selected comparison horizon", options=available_horizons)
+    if h not in available_horizons:
+        st.warning("The selected horizon is not supported by the filtered customer data.")
+        st.stop()
     horizon_unit = "month" if h == 1 else "months"
 
     ltv_view = res[(res["H"] == h) & (res["plan"] == "all")].set_index("source").sort_values("ltv", ascending=False)
@@ -201,7 +248,9 @@ if data is not None:
             horizons=available_horizons,
             cac_by_source=cac_inputs,
         ).set_index("source")
-        ltv_view = ltv_view.join(economics[["cac", "ltv_cac"]]).join(payback)
+        ltv_view = ltv_view.join(
+            economics[["cac", "ltv_cac", "ltv_minus_cac"]]
+        ).join(payback)
         payback_display = pd.Series("", index=ltv_view.index, dtype="object")
         costed = ltv_view["cac"].notna()
         payback_display.loc[costed] = "Not reached"
@@ -213,6 +262,7 @@ if data is not None:
     else:
         ltv_view["cac"] = np.nan
         ltv_view["ltv_cac"] = np.nan
+        ltv_view["ltv_minus_cac"] = np.nan
         ltv_view["payback"] = ""
 
     forecast = survival_ltv_forecast(filtered, asof_ts, available_horizons)
@@ -234,6 +284,7 @@ if data is not None:
             "n",
             "cac",
             "ltv_cac",
+            "ltv_minus_cac",
             "payback",
             "forecast_ltv",
             "forecast_n",
@@ -246,6 +297,7 @@ if data is not None:
             "n": "Observed N",
             "cac": "CAC",
             "ltv_cac": "LTV:CAC",
+            "ltv_minus_cac": "LTV - CAC",
             "payback": "Observed payback",
             "forecast_ltv": "Forecast LTV",
             "forecast_n": "Forecast N",
@@ -266,8 +318,18 @@ if data is not None:
         "Forecast uses Kaplan–Meier retention by source and plan; Forecast N counts customers in supported segments and is not realized LTV."
     )
 
-    bar_data = ltv_view["ltv"].sort_values(ascending=False)
-    st.bar_chart(bar_data)
+    ltv_chart, net_chart = st.columns(2)
+    with ltv_chart:
+        st.subheader("Observed LTV by source")
+        st.bar_chart(ltv_view["ltv"].sort_values(ascending=False))
+    with net_chart:
+        st.subheader("LTV - CAC by source")
+        net_ltv = ltv_view["ltv_minus_cac"].dropna().sort_values(ascending=False)
+        if net_ltv.empty:
+            st.info("Enter CAC values to compare LTV less acquisition cost.")
+        else:
+            st.bar_chart(net_ltv)
+        st.caption("Revenue less acquisition cost; excludes servicing and other costs.")
 
     st.subheader("Detailed LTV table")
     detail = res[(res["H"] == h)].pivot(index="source", columns="plan", values="ltv").round(2)
