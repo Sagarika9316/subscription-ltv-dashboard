@@ -276,6 +276,10 @@ def test_time_based_model_evaluation_scores_mature_holdout():
     assert summary["coverage"] == 1
     assert summary["cox_parameter_count"] > 0
     assert summary["cox_events_per_parameter"] > 0
+    assert summary["ph_tests"]["p"].between(0, 1).all()
+    assert summary["ph_tests"]["potential_violation"].equals(
+        summary["ph_tests"]["p"] < 0.05
+    )
     assert summary["km_mae"] >= 0
     assert summary["cox_mae"] >= 0
     assert summary["km_rmse"] >= 0

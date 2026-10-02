@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from lifelines import CoxPHFitter, KaplanMeierFitter
 from lifelines.exceptions import ConvergenceError
+from lifelines.statistics import proportional_hazard_test
 
 from utils import build_eligibility, mature_at, revenue_at
 
@@ -131,6 +132,14 @@ def evaluate_survival_models(
     )
     cox_parameter_count = len(cox.params_)
     cox_events_per_parameter = int(train["event"].sum()) / max(cox_parameter_count, 1)
+    ph_test = proportional_hazard_test(
+        cox,
+        train[["duration", "event", "source", "plan"]],
+        time_transform="rank",
+    )
+    ph_tests = ph_test.summary.reset_index()
+    ph_tests = ph_tests.rename(columns={ph_tests.columns[0]: "predictor"})
+    ph_tests["potential_violation"] = ph_tests["p"] < 0.05
 
     eligibility = build_eligibility(test, asof=asof)
     paid = eligibility[:, :38].copy()
@@ -211,6 +220,8 @@ def evaluate_survival_models(
         "train_events": int(train["event"].sum()),
         "cox_parameter_count": cox_parameter_count,
         "cox_events_per_parameter": cox_events_per_parameter,
+        "ph_tests": ph_tests,
+        "ph_violation_count": int(ph_tests["potential_violation"].sum()),
         "holdout_n": len(test),
         "scored_n": len(scored),
         "coverage": len(scored) / len(test),

@@ -595,6 +595,42 @@ if data is not None:
                 if validation_summary["cox_rmse"] > validation_summary["km_rmse"]:
                     result_note += " Cox has higher RMSE, so the result is mixed."
                 st.info(result_note)
+                ph_tests = validation_summary["ph_tests"]
+                ph_violations = ph_tests[ph_tests["potential_violation"]]
+                if ph_violations.empty:
+                    st.info(
+                        "The Schoenfeld test found no statistically significant evidence against proportional hazards at the 5% level. This does not prove the assumption holds."
+                    )
+                else:
+                    predictors = ", ".join(ph_violations["predictor"].tolist())
+                    st.warning(
+                        "The Schoenfeld test found potential proportional-hazards violations for: "
+                        f"{predictors}. Treat Cox estimates cautiously; inspect time-varying effects."
+                    )
+                with st.expander("Cox proportional-hazards diagnostic details"):
+                    st.caption(
+                        "Schoenfeld-residual tests are fit on the training split only. "
+                        "Small p-values flag possible time-varying effects; large samples can detect small departures."
+                    )
+                    ph_display = ph_tests[
+                        ["predictor", "test_statistic", "p", "potential_violation"]
+                    ].rename(
+                        columns={
+                            "predictor": "Predictor",
+                            "test_statistic": "Test statistic",
+                            "p": "p-value",
+                            "potential_violation": "Potential violation",
+                        }
+                    )
+                    st.dataframe(
+                        ph_display,
+                        hide_index=True,
+                        width="stretch",
+                        column_config={
+                            "p-value": st.column_config.NumberColumn(format="%.4g"),
+                            "Test statistic": st.column_config.NumberColumn(format="%.4g"),
+                        },
+                    )
                 st.dataframe(
                     validation_result["by_source"].rename(
                         columns={
