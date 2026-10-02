@@ -10,8 +10,12 @@ from ltv_models import (
     estimate_observed_payback,
     survival_ltv_forecast,
 )
-from survival_models import cox_survival_forecast
-from survival_models import evaluate_survival_models, evaluate_survival_models_rolling
+from survival_models import (
+    aft_survival_forecast,
+    cox_survival_forecast,
+    evaluate_survival_models,
+    evaluate_survival_models_rolling,
+)
 from streamlit_app import compute_ltv_summary
 from utils import contribution_at, normalize_subscription_dataframe
 
@@ -241,6 +245,34 @@ def test_cox_survival_forecast_returns_horizon_ltv_by_source():
     at_12_months = result[result["H"] == 12]
     assert set(at_12_months["source"]) == {"email", "paid"}
     assert (at_12_months["cox_ltv"] > 0).all()
+    assert (at_12_months["n"] == 40).all()
+
+
+def test_aft_survival_forecast_returns_horizon_ltv_by_source():
+    rows = []
+    created = pd.Timestamp("2020-01-01")
+    for index in range(80):
+        source = "email" if index % 2 == 0 else "paid"
+        plan = "monthly" if index % 4 < 2 else "annual"
+        ended = created + pd.DateOffset(months=5 + index % 18) if index % 3 == 0 else pd.NaT
+        rows.append(
+            {
+                "source": source,
+                "plan": plan,
+                "step": 1 if plan == "monthly" else 12,
+                "price": 15 if plan == "monthly" else 150,
+                "created_at": created,
+                "ended_at": ended,
+            }
+        )
+
+    result = aft_survival_forecast(
+        pd.DataFrame(rows), pd.Timestamp("2024-12-31"), [1, 3, 12]
+    )
+
+    at_12_months = result[result["H"] == 12]
+    assert set(at_12_months["source"]) == {"email", "paid"}
+    assert (at_12_months["aft_ltv"] > 0).all()
     assert (at_12_months["n"] == 40).all()
 
 

@@ -14,6 +14,7 @@ from ltv_models import (
     source_ltv_confidence_intervals,
     survival_ltv_forecast,
 )
+from survival_models import aft_survival_forecast
 from utils import (
     ASOF,
     HORIZONS,
@@ -322,6 +323,21 @@ if data is not None:
             cox_view[["cox_ltv", "n"]].rename(columns={"n": "cox_n"})
         )
 
+    aft_error = None
+    try:
+        aft_forecast = aft_survival_forecast(filtered, asof_ts, available_horizons)
+    except (ConvergenceError, ValueError) as error:
+        aft_forecast = pd.DataFrame(columns=["source", "H", "aft_ltv", "n"])
+        aft_error = str(error)
+    aft_view = aft_forecast[aft_forecast["H"] == h].set_index("source")
+    if aft_view.empty:
+        ltv_view["aft_ltv"] = np.nan
+        ltv_view["aft_n"] = np.nan
+    else:
+        ltv_view = ltv_view.join(
+            aft_view[["aft_ltv", "n"]].rename(columns={"n": "aft_n"})
+        )
+
     st.subheader(f"Model comparison at {h} {horizon_unit}")
     comparison = ltv_view[
         [
@@ -340,6 +356,8 @@ if data is not None:
             "forecast_n",
             "cox_ltv",
             "cox_n",
+            "aft_ltv",
+            "aft_n",
         ]
     ].rename(
         columns={
@@ -358,6 +376,8 @@ if data is not None:
             "forecast_n": "KM N",
             "cox_ltv": "Cox PH LTV",
             "cox_n": "Cox N",
+            "aft_ltv": "Weibull AFT LTV",
+            "aft_n": "AFT N",
         }
     )
     st.dataframe(comparison, width="stretch")
@@ -374,7 +394,7 @@ if data is not None:
         )
 
     st.markdown("**Model assumptions and sample coverage**")
-    observed_notes, economics_notes, km_notes, cox_notes = st.columns(4)
+    observed_notes, economics_notes, km_notes, cox_notes, aft_notes = st.columns(5)
     observed_notes.caption(
         f"Observed LTV uses fully mature customers at {h} months; interval is bootstrap-based. Observed N is shown per source."
     )
@@ -386,6 +406,9 @@ if data is not None:
     )
     cox_notes.caption(
         "Cox PH adjusts for source and plan; assumes proportional hazards. Associations are not causal effects."
+    )
+    aft_notes.caption(
+        "Weibull AFT models event time with a Weibull distribution; this is a gross-revenue forecast."
     )
 
     ltv_chart, net_chart, contribution_chart = st.columns(3)
@@ -479,13 +502,14 @@ if data is not None:
     st.divider()
     st.subheader("Survival model forecasts")
     st.caption(
-        "Both models use right-censored subscription durations and observed billing prices. Forecasts are not realized LTV."
+        "All three models use right-censored subscription durations and observed billing prices. "
+        "Forecasts are gross-revenue estimates, not realized LTV."
     )
     forecast_view = forecast_view.sort_values("forecast_ltv", ascending=False)
     if forecast_view.empty:
         st.info("There is not enough observed follow-up for this source and horizon.")
     else:
-        km_chart, cox_chart = st.columns(2)
+        km_chart, cox_chart, aft_chart = st.columns(3)
         with km_chart:
             st.markdown("**Kaplan–Meier baseline**")
             st.bar_chart(forecast_view["forecast_ltv"])
@@ -497,6 +521,14 @@ if data is not None:
                 st.info("There is not enough supported follow-up for this Cox estimate.")
             else:
                 st.bar_chart(cox_view["cox_ltv"].sort_values(ascending=False))
+        with aft_chart:
+            st.markdown("**Weibull AFT**")
+            if aft_error:
+                st.warning(f"AFT model unavailable: {aft_error}")
+            elif aft_view.empty:
+                st.info("There is not enough supported follow-up for this AFT estimate.")
+            else:
+                st.bar_chart(aft_view["aft_ltv"].sort_values(ascending=False))
 
     with st.expander("Out-of-time model validation"):
         st.caption(
