@@ -420,3 +420,35 @@ def test_cohort_retention_matrix_omits_immature_ages():
 
     assert january.loc[january["age_month"] == 1, "retention"].iloc[0] == 2 / 3
     assert february["age_month"].tolist() == [0]
+
+
+def test_cohort_matrix_splits_mature_churn_reasons_and_censors_active_users():
+    created = pd.Timestamp("2024-01-01")
+    df = pd.DataFrame(
+        {
+            "source": ["email"] * 4,
+            "plan": ["monthly"] * 4,
+            "created_at": [created] * 4,
+            "ended_at": [
+                pd.Timestamp("2024-01-30"),
+                pd.Timestamp("2024-02-01"),
+                pd.Timestamp("2024-02-15"),
+                pd.NaT,
+            ],
+            "end_reason": ["voluntary", "payment_failed", "other", None],
+        }
+    )
+
+    result = cohort_retention_matrix(df, pd.Timestamp("2024-03-01"), max_age=2)
+    month_one = result[result["age_month"] == 1].iloc[0]
+    month_two = result[result["age_month"] == 2].iloc[0]
+
+    assert month_one["matured"] == 4
+    assert month_one["retained"] == 3
+    assert month_one["voluntary_churned"] == 1
+    assert month_one["payment_failure_churned"] == 0
+    assert month_two["churned"] == 3
+    assert month_two["voluntary_churned"] == 1
+    assert month_two["payment_failure_churned"] == 1
+    assert month_two["other_churned"] == 1
+    assert month_two["retained"] == 1

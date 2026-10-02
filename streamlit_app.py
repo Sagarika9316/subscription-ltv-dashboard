@@ -492,6 +492,78 @@ if data is not None:
                 width="stretch",
             )
 
+        st.markdown("**Cumulative churn by source and plan**")
+        st.caption(
+            "Each row is measured at customer age 1, 3, 6, or 12 months. The denominator includes only "
+            "customers with enough follow-up to reach that age. Active subscriptions are right-censored "
+            "and counted as retained through their observable age, not as churn. Terminations on the exact "
+            "checkpoint date count as retained at that checkpoint."
+        )
+        churn_ages = retention[retention["age_month"].isin([1, 3, 6, 12])]
+        if churn_ages.empty:
+            st.info("No selected source/plan cohorts have mature observations at months 1, 3, 6, or 12.")
+        else:
+            churn_summary = (
+                churn_ages.groupby(["source", "plan", "age_month"], as_index=False)
+                .agg(
+                    matured=("matured", "sum"),
+                    retained=("retained", "sum"),
+                    churned=("churned", "sum"),
+                    voluntary=("voluntary_churned", "sum"),
+                    payment_failure=("payment_failure_churned", "sum"),
+                    other=("other_churned", "sum"),
+                )
+            )
+            churn_summary["retention_rate"] = (
+                churn_summary["retained"] / churn_summary["matured"]
+            )
+            churn_summary["churn_rate"] = (
+                churn_summary["churned"] / churn_summary["matured"]
+            )
+            churn_summary["voluntary_rate"] = (
+                churn_summary["voluntary"] / churn_summary["matured"]
+            )
+            churn_summary["payment_failure_rate"] = (
+                churn_summary["payment_failure"] / churn_summary["matured"]
+            )
+            churn_summary["other_rate"] = (
+                churn_summary["other"] / churn_summary["matured"]
+            )
+            churn_summary = churn_summary.rename(
+                columns={
+                    "source": "Source",
+                    "plan": "Plan",
+                    "age_month": "Months since signup",
+                    "matured": "Matured customers",
+                    "retained": "Retained customers",
+                    "churned": "Churned customers",
+                    "voluntary": "Voluntary churned",
+                    "payment_failure": "Payment-failure churned",
+                    "other": "Other/unknown churned",
+                    "retention_rate": "Retention %",
+                    "churn_rate": "Total churn %",
+                    "voluntary_rate": "Voluntary churn %",
+                    "payment_failure_rate": "Payment-failure churn %",
+                    "other_rate": "Other/unknown churn %",
+                }
+            )
+            percentage_columns = [
+                "Retention %",
+                "Total churn %",
+                "Voluntary churn %",
+                "Payment-failure churn %",
+                "Other/unknown churn %",
+            ]
+            st.dataframe(
+                churn_summary,
+                hide_index=True,
+                column_config={
+                    column: st.column_config.NumberColumn(format="percent")
+                    for column in percentage_columns
+                },
+                width="stretch",
+            )
+
     st.download_button(
         label="Download current LTV table",
         data=res.to_csv(index=False).encode("utf-8"),

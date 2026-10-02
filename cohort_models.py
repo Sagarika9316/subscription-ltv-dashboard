@@ -31,13 +31,24 @@ def cohort_retention_matrix(df, asof, max_age=12, min_customers=1):
         for age in range(max_age + 1):
             checkpoint = cohort["created_at"] + pd.DateOffset(months=age)
             mature = checkpoint <= asof
-            at_risk = int(mature.sum())
-            if at_risk < min_customers:
+            matured_count = int(mature.sum())
+            if matured_count < min_customers:
                 continue
 
             ended_at = cohort["ended_at"]
             retained = ended_at.isna() | (ended_at >= checkpoint)
             retained_count = int((retained & mature).sum())
+            churned_mask = ended_at.notna() & (ended_at < checkpoint) & mature
+            churned_count = int(churned_mask.sum())
+            if "end_reason" in cohort:
+                end_reason = cohort["end_reason"].fillna("").astype(str).str.strip().str.lower()
+            else:
+                end_reason = pd.Series("", index=cohort.index)
+            voluntary_count = int((churned_mask & end_reason.eq("voluntary")).sum())
+            payment_failure_count = int(
+                (churned_mask & end_reason.eq("payment_failed")).sum()
+            )
+            other_count = churned_count - voluntary_count - payment_failure_count
             rows.append(
                 {
                     "cohort_month": cohort_month,
@@ -45,9 +56,14 @@ def cohort_retention_matrix(df, asof, max_age=12, min_customers=1):
                     "plan": plan,
                     "age_month": age,
                     "cohort_size": cohort_size,
-                    "at_risk": at_risk,
+                    "matured": matured_count,
                     "retained": retained_count,
-                    "retention": retained_count / at_risk,
+                    "churned": churned_count,
+                    "voluntary_churned": voluntary_count,
+                    "payment_failure_churned": payment_failure_count,
+                    "other_churned": other_count,
+                    "retention": retained_count / matured_count,
+                    "churn_rate": churned_count / matured_count,
                 }
             )
 
@@ -59,8 +75,13 @@ def cohort_retention_matrix(df, asof, max_age=12, min_customers=1):
             "plan",
             "age_month",
             "cohort_size",
-            "at_risk",
+            "matured",
             "retained",
+            "churned",
+            "voluntary_churned",
+            "payment_failure_churned",
+            "other_churned",
             "retention",
+            "churn_rate",
         ],
     )
