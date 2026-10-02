@@ -4,6 +4,8 @@ import pytest
 
 from app import build_eligibility
 from cohort_models import cohort_churn_summary, cohort_retention_matrix
+from experiment_models import two_proportion_sample_size
+from experiment_models import two_proportion_sample_size
 from ltv_models import (
     add_ltv_cac_ratio,
     bootstrap_confidence_interval,
@@ -19,6 +21,22 @@ from survival_models import (
 )
 from streamlit_app import compute_ltv_summary
 from utils import contribution_at, normalize_subscription_dataframe
+
+
+def test_experiment_sample_size_grows_for_smaller_minimum_lift():
+    one_percentage_point = two_proportion_sample_size(0.05, 0.01)
+    half_percentage_point = two_proportion_sample_size(0.05, 0.005)
+
+    assert one_percentage_point == 8158
+    assert half_percentage_point == 31234
+    assert half_percentage_point > one_percentage_point
+
+
+def test_experiment_sample_size_rejects_invalid_rates():
+    with pytest.raises(ValueError, match="Baseline conversion rate"):
+        two_proportion_sample_size(0, 0.01)
+    with pytest.raises(ValueError, match="Minimum lift"):
+        two_proportion_sample_size(0.99, 0.02)
 
 
 def test_build_eligibility_works_without_read_only_errors():
@@ -236,6 +254,19 @@ def test_gross_ltv_cac_candidates_rank_conservatively_and_exclude_missing_costs(
     assert ranked.loc[0, "gross_ltv_cac"] == 3
     assert ranked.loc[0, "lower_bound_gross_ltv_cac"] == 2.4
     assert ranked.loc[0, "lower_bound_covers_cac"]
+
+
+def test_experiment_sample_size_uses_two_arm_conversion_inputs():
+    assert two_proportion_sample_size(0.05, 0.01) == 8158
+    assert two_proportion_sample_size(0.05, 0.005) == 31234
+    assert two_proportion_sample_size(0.05, 0.005) > two_proportion_sample_size(0.05, 0.01)
+
+
+def test_experiment_sample_size_rejects_invalid_conversion_inputs():
+    with pytest.raises(ValueError, match="Baseline conversion rate"):
+        two_proportion_sample_size(0, 0.01)
+    with pytest.raises(ValueError, match="Minimum lift"):
+        two_proportion_sample_size(0.99, 0.02)
 
 
 def test_survival_forecast_uses_plan_billing_cadence_and_observed_support():

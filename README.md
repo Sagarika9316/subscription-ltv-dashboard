@@ -41,3 +41,15 @@ charge. Use the same currency as `price`; do not subtract CAC in this field,
 because CAC is compared separately. If the column is absent, contribution LTV
 is marked unavailable rather than assuming zero costs. Kaplan-Meier and Cox
 forecasts remain gross-revenue forecasts.
+
+## Incrementality experiment planner
+
+The Streamlit planner estimates the eligible audience required **per arm** for
+a randomized two-arm test of paid-subscription conversion. Supply a historical
+control conversion rate and the smallest absolute lift worth detecting. Alpha
+and power are design choices (defaults: 5% and 80%); the planner uses an
+approximate two-sided normal test with equal-sized, independently randomized
+arms. The subscription dataset has no exposed-prospect denominator, treatment
+assignment, or experiment outcome, so these values must come from campaign or
+experiment records. The planner sizes a test; it does not estimate causal lift
+or recommend increasing spend.

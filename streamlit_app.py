@@ -8,6 +8,7 @@ import streamlit as st
 from lifelines.exceptions import ConvergenceError
 
 from cohort_models import cohort_churn_summary, cohort_retention_matrix
+from experiment_models import two_proportion_sample_size
 from ltv_models import (
     add_ltv_cac_ratio,
     estimate_observed_payback,
@@ -422,6 +423,110 @@ if data is not None:
                 f"{candidate['source']} ranks highest among sources with CAC entered, but its lower-bound gross LTV "
                 "does not cover CAC at this horizon. Treat it as a test candidate, not a scale-up recommendation."
             )
+
+    with st.expander("Plan an incrementality experiment"):
+        st.caption(
+            "This plans a randomized test of paid-subscription conversion. Your subscription CSV has no eligible "
+            "prospect counts or control assignment, so enter the baseline rate and audience from campaign data. "
+            "Sample size assumes two equally sized, independently randomized arms and a two-sided test."
+        )
+        planner_sources = sorted(filtered["source"].dropna().unique().tolist())
+        initial_source = candidate["source"] if has_cac and not candidates.empty else planner_sources[0]
+        test_source = st.selectbox(
+            "Source/campaign to test",
+            planner_sources,
+            index=planner_sources.index(initial_source),
+            key="experiment_source",
+        )
+        control_condition = st.text_input(
+            "Control condition",
+            placeholder="e.g. current campaign strategy",
+            key="experiment_control_condition",
+        )
+        treatment_condition = st.text_input(
+            "Treatment condition",
+            placeholder="e.g. increased spend or a new offer",
+            key="experiment_treatment_condition",
+        )
+        baseline_rate_pct = st.number_input(
+            "Historical control paid-conversion rate (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=None,
+            step=0.1,
+            format="%.2f",
+            help="Use the rate among eligible prospects from campaign or experiment logs; it is not in the subscriptions CSV.",
+        )
+        minimum_lift_pp = st.number_input(
+            "Minimum detectable absolute lift (percentage points)",
+            min_value=0.0,
+            max_value=100.0,
+            value=None,
+            step=0.1,
+            format="%.2f",
+            help="Choose the smallest conversion increase worth acting on economically.",
+        )
+        design_alpha, design_power = st.columns(2)
+        alpha_pct = design_alpha.selectbox(
+            "False-positive rate (alpha)", [1, 5, 10], index=1, format_func=lambda value: f"{value}%"
+        )
+        power_pct = design_power.selectbox(
+            "Statistical power", [80, 90, 95], index=0, format_func=lambda value: f"{value}%"
+        )
+        available_per_arm = st.number_input(
+            "Eligible prospects available per arm (optional)",
+            min_value=0,
+            value=0,
+            step=100,
+            help="Enter the reachable audience for the chosen randomization unit. Leave at 0 if unknown.",
+        )
+
+        if baseline_rate_pct is None or minimum_lift_pp is None or minimum_lift_pp == 0:
+            st.info("Enter a historical conversion baseline and a positive minimum lift to calculate sample size.")
+        else:
+            try:
+                required_per_arm = two_proportion_sample_size(
+                    baseline_rate_pct / 100,
+                    minimum_lift_pp / 100,
+                    alpha=alpha_pct / 100,
+                    power=power_pct / 100,
+                )
+            except ValueError as error:
+                st.error(f"Experiment design inputs are invalid: {error}")
+            else:
+                if control_condition.strip() and treatment_condition.strip():
+                    st.caption(
+                        f"Proposed comparison for {test_source}: {treatment_condition.strip()} "
+                        f"versus {control_condition.strip()}. Primary outcome: new paid subscriptions per randomized eligible prospect."
+                    )
+                else:
+                    st.caption("Describe the control and treatment before launching; keep all other conditions comparable.")
+                sample_col, total_col, lift_col = st.columns(3)
+                sample_col.metric("Required per arm", f"{required_per_arm:,}")
+                total_col.metric("Required total audience", f"{2 * required_per_arm:,}")
+                lift_col.metric(
+                    "Incremental conversions at target lift",
+                    f"{required_per_arm * minimum_lift_pp / 100:,.1f}",
+                )
+                if available_per_arm > 0:
+                    if available_per_arm < required_per_arm:
+                        st.warning(
+                            f"The entered audience ({available_per_arm:,} per arm) is below the estimated "
+                            f"requirement ({required_per_arm:,} per arm); the test may be underpowered."
+                        )
+                    else:
+                        st.success("The entered audience meets the approximate sample-size target.")
+                source_cac = pd.to_numeric(cac_inputs.loc[cac_inputs["source"] == test_source, "cac"], errors="coerce")
+                if not source_cac.empty and source_cac.iloc[0] > 0:
+                    st.caption(
+                        f"Manually entered CAC for {test_source}: {source_cac.iloc[0]:,.2f}. "
+                        "Use realized incremental spend and outcomes to evaluate the experiment; CAC is not used in this sample-size calculation."
+                    )
+                st.caption(
+                    "Approximate normal-theory sample size; assumes independent users, no cluster randomization, "
+                    "stable conversion rates, and one primary outcome. Pre-register the analysis and evaluate "
+                    "incremental contribution after costs before changing budget."
+                )
 
     if has_contribution:
         st.caption(
