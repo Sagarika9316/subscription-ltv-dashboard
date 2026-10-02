@@ -5,17 +5,106 @@ ASOF = pd.Timestamp("2026-06-30")
 K = 38  # anniversaries 0..37, enough for 36 months of monthly billing
 HORIZONS = [1, 3, 6, 12, 24, 36]
 
+DEFAULT_BILLING = {"monthly": (1, 15.0), "annual": (12, 150.0)}
+
+
+def normalize_subscription_dataframe(df):
+    df = df.copy()
+    required = {"plan", "created_at", "ended_at", "end_reason"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required subscription columns: {', '.join(sorted(missing))}")
+
+    assumptions = []
+    df["plan"] = df["plan"].astype("string").str.strip().str.lower()
+    if df["plan"].isna().any() or df["plan"].eq("").any():
+        raise ValueError("The 'plan' column must not contain blank values.")
+
+    for column in ("created_at", "canceled_at", "ended_at"):
+        if column not in df:
+            continue
+        parsed = pd.to_datetime(df[column], errors="coerce")
+        invalid = df[column].notna() & parsed.isna()
+        if invalid.any():
+            raise ValueError(f"The '{column}' column contains invalid dates.")
+        df[column] = parsed
+    if df["created_at"].isna().any():
+        raise ValueError("The 'created_at' column must not contain blank values.")
+    df["end_reason"] = df["end_reason"].map(
+        lambda value: value.strip().lower() if isinstance(value, str) else value
+    )
+    ended = df["ended_at"].notna()
+    missing_reason = ended & df["end_reason"].isna()
+    if missing_reason.any():
+        raise ValueError("Ended subscriptions must have an 'end_reason'.")
+    allowed_reasons = {"voluntary", "payment_failed"}
+    unknown_reasons = set(df.loc[ended, "end_reason"].dropna().unique()) - allowed_reasons
+    if unknown_reasons:
+        labels = ", ".join(sorted(unknown_reasons))
+        raise ValueError(
+            f"Unsupported end_reason values: {labels}. Expected 'voluntary' or 'payment_failed'."
+        )
+
+    if "source" not in df:
+        if "channel" not in df:
+            raise ValueError("Provide either a 'source' column or a 'channel' column.")
+        campaign = df.get("utm_campaign", pd.Series("", index=df.index)).fillna("").astype(str)
+        df["source"] = np.where(
+            df["channel"].eq("paid_social"),
+            "paid_social/" + campaign,
+            df["channel"],
+        )
+        assumptions.append("Acquisition source was derived from channel and campaign.")
+    df["source"] = df["source"].astype("string").str.strip()
+    if df["source"].isna().any() or df["source"].eq("").any():
+        raise ValueError("The 'source' column must not contain blank values.")
+
+    for column, default_index, label in (
+        ("step", 0, "billing interval"),
+        ("price", 1, "subscription price"),
+    ):
+        if column not in df:
+            defaults = {
+                plan: billing[default_index]
+                for plan, billing in DEFAULT_BILLING.items()
+            }
+            values = df["plan"].map(defaults)
+            if values.isna().any():
+                unknown = sorted(df.loc[values.isna(), "plan"].unique().tolist())
+                raise ValueError(
+                    f"Provide '{column}' for plans without a built-in {label}: {', '.join(unknown)}."
+                )
+            df[column] = values
+            if column == "step":
+                assumptions.append(
+                    "Billing intervals defaulted by plan (monthly=1, annual=12 months)."
+                )
+            else:
+                assumptions.append(
+                    "Prices defaulted by plan (monthly=$15, annual=$150)."
+                )
+
+        original = df[column]
+        numeric = pd.to_numeric(original, errors="coerce")
+        if (original.notna() & numeric.isna()).any() or numeric.isna().any():
+            raise ValueError(f"The '{column}' column must contain numeric values for every subscription.")
+        if not np.isfinite(numeric.to_numpy(dtype=float)).all():
+            raise ValueError(f"The '{column}' column must contain finite values.")
+        if column == "step":
+            if (numeric <= 0).any() or (numeric % 1 != 0).any():
+                raise ValueError("Billing intervals in 'step' must be positive whole months.")
+            df[column] = numeric.astype(int)
+        else:
+            if (numeric < 0).any():
+                raise ValueError("Subscription prices in 'price' must not be negative.")
+            df[column] = numeric.astype(float)
+
+    df.attrs["normalization_assumptions"] = assumptions
+    return df
+
 
 def prepare_dataframe(path="subscriptions.csv"):
-    df = pd.read_csv(path, parse_dates=["created_at", "canceled_at", "ended_at"])
-    df["step"] = np.where(df["plan"] == "annual", 12, 1)
-    df["price"] = np.where(df["plan"] == "annual", 150, 15)
-    df["source"] = np.where(
-        df["channel"] == "paid_social",
-        "paid_social/" + df["utm_campaign"].fillna(""),
-        df["channel"],
-    )
-    return df
+    return normalize_subscription_dataframe(pd.read_csv(path))
 
 
 def build_eligibility(df, asof=ASOF):

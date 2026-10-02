@@ -14,7 +14,14 @@ from ltv_models import (
     source_ltv_confidence_intervals,
     survival_ltv_forecast,
 )
-from utils import ASOF, HORIZONS, build_eligibility, mature_at, revenue_at
+from utils import (
+    ASOF,
+    HORIZONS,
+    build_eligibility,
+    mature_at,
+    normalize_subscription_dataframe,
+    revenue_at,
+)
 from survival_models import (
     cox_survival_forecast,
     evaluate_survival_models,
@@ -27,21 +34,6 @@ st.set_page_config(
     page_icon="📈",
     layout="wide",
 )
-
-
-def normalize_dataframe(df):
-    df = df.copy()
-    if "plan" not in df.columns:
-        raise ValueError("The file must contain a 'plan' column.")
-    if "source" not in df.columns:
-        df["step"] = np.where(df["plan"] == "annual", 12, 1)
-        df["price"] = np.where(df["plan"] == "annual", 150, 15)
-        df["source"] = np.where(
-            df["channel"] == "paid_social",
-            "paid_social/" + df["utm_campaign"].fillna(""),
-            df["channel"],
-        )
-    return df
 
 
 def compute_ltv_summary(df, asof=ASOF, selected_horizons=None, statistic="mean"):
@@ -89,15 +81,22 @@ with st.sidebar:
     )
     uploaded_file = st.file_uploader("Upload subscriptions CSV", type=["csv"])
     if uploaded_file is not None:
-        data = pd.read_csv(uploaded_file, parse_dates=["created_at", "canceled_at", "ended_at"])
+        data = pd.read_csv(uploaded_file)
     else:
         try:
-            data = pd.read_csv("subscriptions.csv", parse_dates=["created_at", "canceled_at", "ended_at"])
+            data = pd.read_csv("subscriptions.csv")
         except FileNotFoundError:
             data = None
 
     if data is not None:
-        df = normalize_dataframe(data)
+        try:
+            df = normalize_subscription_dataframe(data)
+        except ValueError as error:
+            st.error(f"Invalid subscription data: {error}")
+            st.stop()
+        assumptions = df.attrs.get("normalization_assumptions", [])
+        if assumptions:
+            st.info("Input assumptions: " + " ".join(assumptions))
         asof = st.date_input("As-of date", value=pd.Timestamp(ASOF).date())
         asof_ts = pd.Timestamp(asof)
         plan_options = sorted(df["plan"].dropna().unique().tolist())

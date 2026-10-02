@@ -13,6 +13,7 @@ from ltv_models import (
 from survival_models import cox_survival_forecast
 from survival_models import evaluate_survival_models, evaluate_survival_models_rolling
 from streamlit_app import compute_ltv_summary
+from utils import normalize_subscription_dataframe
 
 
 def test_build_eligibility_works_without_read_only_errors():
@@ -58,6 +59,80 @@ def test_compute_ltv_summary_uses_selected_statistic():
     median_ltv = median_result.query("plan == 'all'").iloc[0]["ltv"]
     assert mean_ltv == 60
     assert median_ltv == 15
+
+
+def test_normalization_preserves_row_level_billing_values():
+    df = pd.DataFrame(
+        {
+            "source": ["email", "paid"],
+            "plan": ["monthly", "annual"],
+            "step": [1, 12],
+            "price": [19.5, 180],
+            "created_at": ["2025-01-01", "2025-01-01"],
+            "ended_at": [None, None],
+            "end_reason": [None, None],
+        }
+    )
+
+    normalized = normalize_subscription_dataframe(df)
+
+    assert normalized["price"].tolist() == [19.5, 180.0]
+    assert normalized["step"].tolist() == [1, 12]
+    assert normalized.attrs["normalization_assumptions"] == []
+
+
+def test_normalization_reports_plan_defaults_and_derives_source():
+    df = pd.DataFrame(
+        {
+            "plan": ["monthly", "annual"],
+            "channel": ["email", "paid_social"],
+            "utm_campaign": [None, "spring"],
+            "created_at": ["2025-01-01", "2025-01-01"],
+            "ended_at": [None, None],
+            "end_reason": [None, None],
+        }
+    )
+
+    normalized = normalize_subscription_dataframe(df)
+
+    assert normalized["source"].tolist() == ["email", "paid_social/spring"]
+    assert normalized["step"].tolist() == [1, 12]
+    assert normalized["price"].tolist() == [15.0, 150.0]
+    assert len(normalized.attrs["normalization_assumptions"]) == 3
+
+
+def test_normalization_rejects_invalid_row_level_price():
+    df = pd.DataFrame(
+        {
+            "source": ["email"],
+            "plan": ["monthly"],
+            "step": [1],
+            "price": [-5],
+            "created_at": ["2025-01-01"],
+            "ended_at": [None],
+            "end_reason": [None],
+        }
+    )
+
+    with pytest.raises(ValueError, match="must not be negative"):
+        normalize_subscription_dataframe(df)
+
+
+def test_normalization_rejects_ended_subscription_without_reason():
+    df = pd.DataFrame(
+        {
+            "source": ["email"],
+            "plan": ["monthly"],
+            "step": [1],
+            "price": [15],
+            "created_at": ["2025-01-01"],
+            "ended_at": ["2025-02-01"],
+            "end_reason": [None],
+        }
+    )
+
+    with pytest.raises(ValueError, match="must have an 'end_reason'"):
+        normalize_subscription_dataframe(df)
 
 
 def test_bootstrap_confidence_interval_is_deterministic_and_handles_constant_values():
