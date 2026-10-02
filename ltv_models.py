@@ -75,6 +75,32 @@ def add_ltv_cac_ratio(ltv_by_source, cac_by_source):
     return result
 
 
+def rank_gross_ltv_cac_candidates(source_summary):
+    required = {"source", "ltv", "ci_low", "cac", "n"}
+    missing = required - set(source_summary.columns)
+    if missing:
+        raise ValueError(f"Missing recommendation columns: {', '.join(sorted(missing))}")
+
+    candidates = source_summary.copy()
+    for column in ("ltv", "ci_low", "cac", "n"):
+        candidates[column] = pd.to_numeric(candidates[column], errors="coerce")
+        candidates = candidates[np.isfinite(candidates[column])]
+    candidates = candidates[
+        (candidates["cac"] > 0)
+        & candidates["ltv"].notna()
+        & candidates["ci_low"].notna()
+        & (candidates["n"] > 0)
+    ].copy()
+    candidates["gross_ltv_cac"] = candidates["ltv"] / candidates["cac"]
+    candidates["lower_bound_gross_ltv_cac"] = candidates["ci_low"] / candidates["cac"]
+    candidates["gross_ltv_minus_cac"] = candidates["ltv"] - candidates["cac"]
+    candidates["lower_bound_covers_cac"] = candidates["lower_bound_gross_ltv_cac"] >= 1
+    return candidates.sort_values(
+        ["lower_bound_gross_ltv_cac", "n"],
+        ascending=[False, False],
+    ).reset_index(drop=True)
+
+
 def estimate_observed_payback(df, paid, asof, horizons, cac_by_source):
     costs = cac_by_source[["source", "cac"]].copy()
     costs["cac"] = pd.to_numeric(costs["cac"], errors="coerce")

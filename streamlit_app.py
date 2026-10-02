@@ -11,6 +11,7 @@ from cohort_models import cohort_churn_summary, cohort_retention_matrix
 from ltv_models import (
     add_ltv_cac_ratio,
     estimate_observed_payback,
+    rank_gross_ltv_cac_candidates,
     source_ltv_confidence_intervals,
     survival_ltv_forecast,
 )
@@ -382,6 +383,41 @@ if data is not None:
     )
     st.dataframe(comparison, width="stretch")
     st.caption("Blank CAC columns mean no positive CAC has been entered. Blank forecast cells mean one or more plan segments lack sufficient follow-up.")
+
+    st.subheader("Candidate for a controlled investment test")
+    candidates = rank_gross_ltv_cac_candidates(ltv_view.reset_index())
+    if candidates.empty:
+        st.info(
+            "Enter a positive CAC for at least one selected source to rank investment-test candidates."
+        )
+    else:
+        candidate = candidates.iloc[0]
+        candidate_metrics = st.columns(5)
+        candidate_metrics[0].metric("Candidate source", candidate["source"])
+        candidate_metrics[1].metric("Entered CAC", f"{candidate['cac']:,.2f}")
+        candidate_metrics[2].metric(
+            "Observed gross LTV:CAC", f"{candidate['gross_ltv_cac']:.2f}x"
+        )
+        candidate_metrics[3].metric(
+            f"Lower-bound gross LTV:CAC ({confidence_level:.0%})",
+            f"{candidate['lower_bound_gross_ltv_cac']:.2f}x",
+        )
+        candidate_metrics[4].metric("Mature customers", f"{int(candidate['n']):,}")
+        st.caption(
+            f"Observed payback at selected mature horizons: {candidate['payback'] or 'not reached'}. "
+            "Ranking favors the strongest lower confidence bound, with mature sample size as a tie-breaker."
+        )
+        if candidate["lower_bound_covers_cac"]:
+            st.info(
+                f"{candidate['source']} is the leading source to test: its lower-bound gross LTV exceeds entered CAC "
+                "at this horizon. This is not net profit or evidence that more spend will cause growth."
+            )
+        else:
+            st.warning(
+                f"{candidate['source']} ranks highest among sources with CAC entered, but its lower-bound gross LTV "
+                "does not cover CAC at this horizon. Treat it as a test candidate, not a scale-up recommendation."
+            )
+
     if has_contribution:
         st.caption(
             "Contribution LTV uses net_contribution_per_charge for each eligible billing event. "

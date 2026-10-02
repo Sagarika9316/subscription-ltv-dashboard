@@ -8,6 +8,7 @@ from ltv_models import (
     add_ltv_cac_ratio,
     bootstrap_confidence_interval,
     estimate_observed_payback,
+    rank_gross_ltv_cac_candidates,
     survival_ltv_forecast,
 )
 from survival_models import (
@@ -194,6 +195,25 @@ def test_unit_economics_calculates_ltv_cac_and_observed_payback():
     assert economics.loc[0, "ltv_cac"] == 1.5
     assert economics.loc[0, "ltv_minus_cac"] == 15
     assert payback.loc[0, "payback_months"] == 3
+
+
+def test_gross_ltv_cac_candidates_rank_conservatively_and_exclude_missing_costs():
+    summary = pd.DataFrame(
+        {
+            "source": ["high point", "strong lower bound", "unknown CAC"],
+            "ltv": [180, 150, 300],
+            "ci_low": [90, 120, 200],
+            "cac": [40, 50, np.nan],
+            "n": [1000, 200, 500],
+        }
+    )
+
+    ranked = rank_gross_ltv_cac_candidates(summary)
+
+    assert ranked["source"].tolist() == ["strong lower bound", "high point"]
+    assert ranked.loc[0, "gross_ltv_cac"] == 3
+    assert ranked.loc[0, "lower_bound_gross_ltv_cac"] == 2.4
+    assert ranked.loc[0, "lower_bound_covers_cac"]
 
 
 def test_survival_forecast_uses_plan_billing_cadence_and_observed_support():
