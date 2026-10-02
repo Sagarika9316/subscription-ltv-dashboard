@@ -7,7 +7,16 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from lifelines import KaplanMeierFitter
 
-from utils import ASOF, HORIZONS, K, build_eligibility, mature_at, prepare_dataframe, revenue_at
+from utils import (
+    ASOF,
+    HORIZONS,
+    K,
+    STATIC_CAC_BY_SOURCE,
+    build_eligibility,
+    mature_at,
+    prepare_dataframe,
+    revenue_at,
+)
 
 
 def main():
@@ -79,16 +88,8 @@ def main():
         .round(3)
     )
 
-    cac = {
-        "email": 20,
-        "direct": 40,
-        "organic_search": 30,
-        "organic_social": 25,
-        "paid_social/lookalike_subscribers": 60,
-        "paid_social/prospecting_broad": 60,
-    }
     t12 = ltv[12].to_frame("ltv12")
-    t12["cac"] = pd.Series(cac)
+    t12["cac"] = pd.Series(STATIC_CAC_BY_SOURCE)
     t12["ltv_cac"] = (t12["ltv12"] / t12["cac"]).round(2)
     print(t12)
 

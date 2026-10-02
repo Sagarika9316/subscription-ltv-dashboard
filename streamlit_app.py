@@ -20,6 +20,7 @@ from survival_models import aft_survival_forecast
 from utils import (
     ASOF,
     HORIZONS,
+    STATIC_CAC_BY_SOURCE,
     build_eligibility,
     mature_at,
     normalize_subscription_dataframe,
@@ -162,19 +163,44 @@ with st.sidebar:
             format_func=lambda value: f"{value:.0%}",
         )
         with st.expander("Acquisition costs (CAC)"):
-            st.caption("Enter CAC per customer in the same currency as revenue. Leave unknown sources blank.")
+            st.caption("Enter CAC per customer in the same currency as revenue. Unknown values stay blank.")
+            static_cac_available = df["currency"].iloc[0] == "USD"
+            use_static_cac = st.checkbox(
+                "Use illustrative static CAC assumptions",
+                value=False,
+                key="use_static_cac_assumptions",
+                disabled=not static_cac_available,
+                help="USD-only example values from the batch analysis; not measured CAC from the subscription CSV.",
+            )
+            if not static_cac_available:
+                st.warning(
+                    f"Static CAC assumptions are in USD and disabled for {df['currency'].iloc[0]} data. Enter CAC values in {df['currency'].iloc[0]} instead."
+                )
+            if use_static_cac:
+                st.warning(
+                    "Illustrative assumptions are active. Replace them with verified source-level CAC before making business decisions."
+                )
             cac_sources = sorted(df["source"].dropna().unique().tolist())
             cac_defaults = pd.DataFrame(
                 {
                     "source": cac_sources,
-                    "cac": pd.Series(index=range(len(cac_sources)), dtype="float64"),
+                    "cac": [
+                        STATIC_CAC_BY_SOURCE.get(source, np.nan)
+                        if use_static_cac
+                        else np.nan
+                        for source in cac_sources
+                    ],
                 }
             )
             cac_inputs = st.data_editor(
                 cac_defaults,
                 hide_index=True,
                 num_rows="fixed",
-                key="cac_by_source_editor",
+                key=(
+                    "cac_by_source_static_editor"
+                    if use_static_cac
+                    else "cac_by_source_manual_editor"
+                ),
                 column_config={
                     "source": st.column_config.TextColumn("Source", disabled=True),
                     "cac": st.column_config.NumberColumn(

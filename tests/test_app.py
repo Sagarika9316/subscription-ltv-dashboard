@@ -20,7 +20,11 @@ from survival_models import (
     evaluate_survival_models_rolling,
 )
 from streamlit_app import compute_ltv_summary
-from utils import contribution_at, normalize_subscription_dataframe
+from utils import (
+    STATIC_CAC_BY_SOURCE,
+    contribution_at,
+    normalize_subscription_dataframe,
+)
 
 
 def test_experiment_sample_size_grows_for_smaller_minimum_lift():
@@ -259,6 +263,15 @@ def test_gross_ltv_cac_candidates_rank_conservatively_and_exclude_missing_costs(
     assert not stricter["passes_gross_screen"].any()
 
 
+def test_static_cac_assumptions_are_available_by_acquisition_source():
+    assert STATIC_CAC_BY_SOURCE["email"] == 20
+    assert STATIC_CAC_BY_SOURCE["direct"] == 40
+    assert STATIC_CAC_BY_SOURCE["organic_search"] == 30
+    assert STATIC_CAC_BY_SOURCE["organic_social"] == 25
+    assert STATIC_CAC_BY_SOURCE["paid_social/lookalike_subscribers"] == 60
+    assert STATIC_CAC_BY_SOURCE["paid_social/prospecting_broad"] == 60
+
+
 def test_experiment_sample_size_uses_two_arm_conversion_inputs():
     assert two_proportion_sample_size(0.05, 0.01) == 8158
     assert two_proportion_sample_size(0.05, 0.005) == 31234
@@ -270,6 +283,17 @@ def test_experiment_sample_size_rejects_invalid_conversion_inputs():
         two_proportion_sample_size(0, 0.01)
     with pytest.raises(ValueError, match="Minimum lift"):
         two_proportion_sample_size(0.99, 0.02)
+
+
+def test_static_cac_assumptions_are_labeled_examples():
+    assert STATIC_CAC_BY_SOURCE == {
+        "email": 20,
+        "direct": 40,
+        "organic_search": 30,
+        "organic_social": 25,
+        "paid_social/lookalike_subscribers": 60,
+        "paid_social/prospecting_broad": 60,
+    }
 
 
 def test_survival_forecast_uses_plan_billing_cadence_and_observed_support():

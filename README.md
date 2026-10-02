@@ -32,6 +32,21 @@ For data-specific billing, include these columns in the CSV:
 
 The first charge is assumed to occur at signup, with subsequent charges at each billing interval. If these fields are absent, the app uses a hypothetical USD schedule: monthly at $15 every 1 month and annual at $150 every 12 months. At horizon H, revenue includes scheduled charges strictly before month H, not a charge exactly at H. Make sure these assumptions match the actual billing contract before using the results for business decisions.
 
+## Optional illustrative CAC assumptions
+
+The Streamlit CAC editor is blank by default. Selecting **Use illustrative static CAC assumptions** pre-fills these example USD-per-subscriber values:
+
+| Source | Illustrative CAC |
+| --- | ---: |
+| email | $20 |
+| direct | $40 |
+| organic_search | $30 |
+| organic_social | $25 |
+| paid_social/lookalike_subscribers | $60 |
+| paid_social/prospecting_broad | $60 |
+
+These values are hypothetical examples, not measured acquisition costs. Edit or replace them with verified spend before interpreting the CAC ranking. The default 1.0x gross LTV:CAC screen means gross revenue only matches CAC; it does not establish profit because variable costs are not deducted. A passing source is a candidate for a controlled test, not an instruction to increase spend.
+
 ## Optional contribution-margin input
 
 The Streamlit dashboard can also show contribution LTV when the CSV includes

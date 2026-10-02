@@ -7,6 +7,14 @@ HORIZONS = [1, 3, 6, 12, 24, 36]
 
 DEFAULT_BILLING = {"monthly": (1, 15.0), "annual": (12, 150.0)}
 DEFAULT_CURRENCY = "USD"
+STATIC_CAC_BY_SOURCE = {
+    "email": 20,
+    "direct": 40,
+    "organic_search": 30,
+    "organic_social": 25,
+    "paid_social/lookalike_subscribers": 60,
+    "paid_social/prospecting_broad": 60,
+}
 
 
 def normalize_subscription_dataframe(df):
