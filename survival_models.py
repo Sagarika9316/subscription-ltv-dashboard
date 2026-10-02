@@ -113,6 +113,8 @@ def evaluate_survival_models(df, asof, horizon, n_bootstrap=500):
         event_col="event",
         formula=" + ".join(formula_terms),
     )
+    cox_parameter_count = len(cox.params_)
+    cox_events_per_parameter = int(train["event"].sum()) / max(cox_parameter_count, 1)
 
     eligibility = build_eligibility(test, asof=asof)
     paid = eligibility[:, :38].copy()
@@ -191,6 +193,8 @@ def evaluate_survival_models(df, asof, horizon, n_bootstrap=500):
         "test_end": test["created_at"].max(),
         "train_n": len(train),
         "train_events": int(train["event"].sum()),
+        "cox_parameter_count": cox_parameter_count,
+        "cox_events_per_parameter": cox_events_per_parameter,
         "holdout_n": len(test),
         "scored_n": len(scored),
         "coverage": len(scored) / len(test),

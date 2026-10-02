@@ -472,6 +472,19 @@ if data is not None:
                     f"Scored {validation_summary['scored_n']:,} of "
                     f"{validation_summary['holdout_n']:,} mature customers."
                 )
+                st.caption(
+                    "Billing assumptions: uses row-level step/price when present; the built-in defaults are "
+                    "$15 charged monthly and $150 charged annually. Revenue at horizon H includes charges "
+                    "scheduled before H, not at H; taxes, refunds, and servicing costs are excluded unless "
+                    "already reflected in price."
+                )
+                if validation_summary["cox_events_per_parameter"] < 10:
+                    st.warning(
+                        f"Cox PH has {validation_summary['train_events']:,} training cancellations for "
+                        f"{validation_summary['cox_parameter_count']} fitted coefficients "
+                        f"({validation_summary['cox_events_per_parameter']:.1f} events per coefficient). "
+                        "This is a low-event rule-of-thumb warning; treat Cox scores as exploratory."
+                    )
                 mae_km, mae_cox, rmse_km, rmse_cox = st.columns(4)
                 mae_km.metric("Kaplan–Meier MAE", f"{validation_summary['km_mae']:,.2f}")
                 mae_cox.metric("Cox PH MAE", f"{validation_summary['cox_mae']:,.2f}")
