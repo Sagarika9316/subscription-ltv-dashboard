@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from lifelines import CoxPHFitter, KaplanMeierFitter
+from lifelines.exceptions import ConvergenceError
 
 from utils import build_eligibility, mature_at, revenue_at
 
@@ -76,10 +77,25 @@ def cox_survival_forecast(df, asof, horizons, penalizer=0.1):
     return pd.DataFrame(rows, columns=columns).sort_values(["source", "H"])
 
 
-def evaluate_survival_models(df, asof, horizon, n_bootstrap=500):
+def evaluate_survival_models(
+    df,
+    asof,
+    horizon,
+    n_bootstrap=500,
+    holdout_start=None,
+    holdout_end=None,
+):
     asof = pd.Timestamp(asof)
-    test_end = asof - pd.DateOffset(months=horizon) + pd.DateOffset(days=1)
-    test_start = test_end - pd.DateOffset(months=horizon) + pd.DateOffset(days=1)
+    if (holdout_start is None) != (holdout_end is None):
+        raise ValueError("Provide both holdout_start and holdout_end, or neither.")
+    if holdout_start is None:
+        test_end = asof - pd.DateOffset(months=horizon) + pd.DateOffset(days=1)
+        test_start = test_end - pd.DateOffset(months=horizon) + pd.DateOffset(days=1)
+    else:
+        test_start = pd.Timestamp(holdout_start)
+        test_end = pd.Timestamp(holdout_end)
+        if test_start > test_end:
+            raise ValueError("holdout_start must be on or before holdout_end.")
     train_cutoff = test_start - pd.DateOffset(days=1)
 
     train = df[df["created_at"] <= train_cutoff].copy()
@@ -225,3 +241,59 @@ def evaluate_survival_models(df, asof, horizon, n_bootstrap=500):
         )
     by_source = pd.DataFrame(source_rows).sort_values("source")
     return summary, by_source
+
+
+def evaluate_survival_models_rolling(df, asof, horizon, n_folds=3):
+    if n_folds < 1:
+        raise ValueError("n_folds must be positive.")
+
+    asof = pd.Timestamp(asof)
+    latest_end = asof - pd.DateOffset(months=horizon) + pd.DateOffset(days=1)
+    rows = []
+    for fold_index in range(n_folds):
+        periods_back = n_folds - fold_index - 1
+        holdout_end = latest_end - pd.DateOffset(months=periods_back * horizon)
+        holdout_start = (
+            holdout_end - pd.DateOffset(months=horizon) + pd.DateOffset(days=1)
+        )
+        row = {
+            "fold": fold_index + 1,
+            "holdout_start": holdout_start,
+            "holdout_end": holdout_end,
+            "status": "complete",
+            "error": "",
+        }
+        try:
+            summary, _ = evaluate_survival_models(
+                df,
+                asof,
+                horizon,
+                holdout_start=holdout_start,
+                holdout_end=holdout_end,
+            )
+            row.update(
+                {
+                    "train_cutoff": summary["train_cutoff"],
+                    "train_n": summary["train_n"],
+                    "train_events": summary["train_events"],
+                    "holdout_n": summary["holdout_n"],
+                    "scored_n": summary["scored_n"],
+                    "coverage": summary["coverage"],
+                    "km_mae": summary["km_mae"],
+                    "cox_mae": summary["cox_mae"],
+                    "km_rmse": summary["km_rmse"],
+                    "cox_rmse": summary["cox_rmse"],
+                    "cox_minus_km_mae": summary["cox_minus_km_mae"],
+                    "delta_mae_ci_low": summary["delta_mae_ci_low"],
+                    "delta_mae_ci_high": summary["delta_mae_ci_high"],
+                    "cox_events_per_parameter": summary[
+                        "cox_events_per_parameter"
+                    ],
+                }
+            )
+        except (ConvergenceError, ValueError) as error:
+            row["status"] = "unavailable"
+            row["error"] = str(error)
+        rows.append(row)
+
+    return pd.DataFrame(rows)

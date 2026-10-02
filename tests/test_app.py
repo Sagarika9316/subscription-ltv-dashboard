@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from app import build_eligibility
+from cohort_models import cohort_retention_matrix
 from ltv_models import (
     add_ltv_cac_ratio,
     bootstrap_confidence_interval,
@@ -10,7 +11,7 @@ from ltv_models import (
     survival_ltv_forecast,
 )
 from survival_models import cox_survival_forecast
-from survival_models import evaluate_survival_models
+from survival_models import evaluate_survival_models, evaluate_survival_models_rolling
 from streamlit_app import compute_ltv_summary
 
 
@@ -209,3 +210,67 @@ def test_time_based_evaluation_rejects_uninformative_constant_holdout():
         evaluate_survival_models(
             pd.DataFrame(rows), pd.Timestamp("2025-01-03"), horizon=12
         )
+
+
+def test_rolling_survival_evaluation_returns_non_overlapping_folds():
+    rows = []
+    for index in range(80):
+        source = "email" if index % 2 == 0 else "paid"
+        plan = "monthly" if index % 4 < 2 else "annual"
+        ended = pd.Timestamp("2023-03-01") if index % 3 == 0 else pd.NaT
+        rows.append(
+            {
+                "source": source,
+                "plan": plan,
+                "step": 1 if plan == "monthly" else 12,
+                "price": 15 if plan == "monthly" else 150,
+                "created_at": pd.Timestamp("2023-01-01"),
+                "ended_at": ended,
+                "end_reason": "voluntary" if pd.notna(ended) else None,
+            }
+        )
+    for cohort_date in ["2024-01-15", "2024-04-15", "2024-07-15"]:
+        created = pd.Timestamp(cohort_date)
+        for index in range(48):
+            source = "email" if index % 2 == 0 else "paid"
+            plan = "monthly" if index % 4 < 2 else "annual"
+            ended = created + pd.DateOffset(months=2) if index % 3 == 0 else pd.NaT
+            rows.append(
+                {
+                    "source": source,
+                    "plan": plan,
+                    "step": 1 if plan == "monthly" else 12,
+                    "price": 15 if plan == "monthly" else 150,
+                    "created_at": created,
+                    "ended_at": ended,
+                    "end_reason": "voluntary" if pd.notna(ended) else None,
+                }
+            )
+
+    folds = evaluate_survival_models_rolling(
+        pd.DataFrame(rows), pd.Timestamp("2024-12-31"), horizon=3, n_folds=3
+    )
+
+    assert len(folds) == 3
+    assert folds["status"].eq("complete").all()
+    assert folds["holdout_start"].is_monotonic_increasing
+    assert folds["scored_n"].eq(48).all()
+
+
+def test_cohort_retention_matrix_omits_immature_ages():
+    df = pd.DataFrame(
+        {
+            "source": ["email"] * 4,
+            "plan": ["monthly"] * 4,
+            "created_at": [pd.Timestamp("2024-01-01")] * 3
+            + [pd.Timestamp("2024-02-15")],
+            "ended_at": [pd.Timestamp("2024-01-30"), pd.NaT, pd.NaT, pd.NaT],
+        }
+    )
+
+    result = cohort_retention_matrix(df, pd.Timestamp("2024-03-01"), max_age=2)
+    january = result[result["cohort_month"] == pd.Timestamp("2024-01-01")]
+    february = result[result["cohort_month"] == pd.Timestamp("2024-02-01")]
+
+    assert january.loc[january["age_month"] == 1, "retention"].iloc[0] == 2 / 3
+    assert february["age_month"].tolist() == [0]

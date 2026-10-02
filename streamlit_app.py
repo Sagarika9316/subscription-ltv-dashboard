@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 from lifelines.exceptions import ConvergenceError
 
+from cohort_models import cohort_retention_matrix
 from ltv_models import (
     add_ltv_cac_ratio,
     estimate_observed_payback,
@@ -14,7 +15,11 @@ from ltv_models import (
     survival_ltv_forecast,
 )
 from utils import ASOF, HORIZONS, build_eligibility, mature_at, revenue_at
-from survival_models import cox_survival_forecast, evaluate_survival_models
+from survival_models import (
+    cox_survival_forecast,
+    evaluate_survival_models,
+    evaluate_survival_models_rolling,
+)
 
 
 st.set_page_config(
@@ -382,6 +387,41 @@ if data is not None:
     ].pivot(index="source", columns="H", values="ltv").round(1)
     st.line_chart(horizon_table)
 
+    with st.expander("Cohort retention matrix"):
+        st.caption(
+            "Each row is a signup-month/source/plan cohort. Cells show the share retained at each customer age; "
+            "ages without enough observed customers are left blank."
+        )
+        cohort_data = df[
+            df["source"].isin(source_filter)
+            & df["plan"].isin(plan_filter)
+            & (df["created_at"] >= pd.Timestamp(cohort_start))
+            & (df["created_at"] < pd.Timestamp(cohort_end) + pd.DateOffset(days=1))
+        ].copy()
+        retention = cohort_retention_matrix(
+            cohort_data,
+            asof=asof_ts,
+            max_age=max(HORIZONS),
+            min_customers=min_users,
+        )
+        if retention.empty:
+            st.info("No cohort ages meet the minimum customer threshold.")
+        else:
+            retention_table = retention.pivot(
+                index=["source", "plan", "cohort_month"],
+                columns="age_month",
+                values="retention",
+            )
+            retention_table.columns = [f"Month {age}" for age in retention_table.columns]
+            st.dataframe(
+                retention_table,
+                column_config={
+                    column: st.column_config.NumberColumn(format="percent")
+                    for column in retention_table.columns
+                },
+                width="stretch",
+            )
+
     st.download_button(
         label="Download current LTV table",
         data=res.to_csv(index=False).encode("utf-8"),
@@ -525,5 +565,98 @@ if data is not None:
                 )
         else:
             st.info("Choose a validation horizon and run the holdout comparison.")
+
+        st.divider()
+        rolling_folds = st.select_slider(
+            "Rolling holdout folds",
+            options=[2, 3, 4],
+            value=3,
+        )
+        rolling_signature = (
+            validation_horizon,
+            rolling_folds,
+            str(asof_ts),
+            tuple(sorted(source_filter)),
+            tuple(sorted(plan_filter)),
+            len(validation_data),
+            str(validation_data["created_at"].min()),
+            str(validation_data["created_at"].max()),
+        )
+        if st.button("Run rolling validation", key="run_rolling_validation"):
+            try:
+                with st.spinner("Evaluating consecutive mature signup-cohort windows..."):
+                    rolling_results = evaluate_survival_models_rolling(
+                        validation_data,
+                        asof_ts,
+                        validation_horizon,
+                        n_folds=rolling_folds,
+                    )
+                st.session_state["rolling_validation_result"] = {
+                    "signature": rolling_signature,
+                    "results": rolling_results,
+                    "error": None,
+                }
+            except (ConvergenceError, ValueError) as error:
+                st.session_state["rolling_validation_result"] = {
+                    "signature": rolling_signature,
+                    "results": None,
+                    "error": str(error),
+                }
+
+        rolling_result = st.session_state.get("rolling_validation_result")
+        if rolling_result and rolling_result["signature"] == rolling_signature:
+            if rolling_result["error"]:
+                st.warning(f"Rolling validation unavailable: {rolling_result['error']}")
+            else:
+                fold_results = rolling_result["results"]
+                completed_folds = fold_results[fold_results["status"] == "complete"]
+                if completed_folds.empty:
+                    st.warning("No rolling fold had enough mature observations and training follow-up.")
+                else:
+                    st.caption(
+                        "Each fold trains before its signup window and tests on the next non-overlapping, "
+                        "fully mature window. Fold metrics are comparable within this dataset; means below "
+                        "are unweighted averages across completed folds."
+                    )
+                    fold_mae, fold_rmse = st.columns(2)
+                    fold_mae.metric(
+                        "Average fold MAE (KM / Cox)",
+                        f"{completed_folds['km_mae'].mean():,.2f} / "
+                        f"{completed_folds['cox_mae'].mean():,.2f}",
+                    )
+                    fold_rmse.metric(
+                        "Average fold RMSE (KM / Cox)",
+                        f"{completed_folds['km_rmse'].mean():,.2f} / "
+                        f"{completed_folds['cox_rmse'].mean():,.2f}",
+                    )
+                    display_folds = fold_results.rename(
+                        columns={
+                            "fold": "Fold",
+                            "status": "Status",
+                            "holdout_start": "Signup window start",
+                            "holdout_end": "Signup window end",
+                            "train_cutoff": "Training cutoff",
+                            "train_n": "Training N",
+                            "train_events": "Training cancellations",
+                            "holdout_n": "Mature holdout N",
+                            "scored_n": "Scored N",
+                            "coverage": "Scored coverage",
+                            "km_mae": "KM MAE",
+                            "cox_mae": "Cox MAE",
+                            "km_rmse": "KM RMSE",
+                            "cox_rmse": "Cox RMSE",
+                            "cox_minus_km_mae": "Cox - KM MAE",
+                            "cox_events_per_parameter": "Cox events / coefficient",
+                            "error": "Note",
+                        }
+                    )
+                    st.dataframe(display_folds, hide_index=True, width="stretch")
+                    if (completed_folds["cox_events_per_parameter"] < 10).any():
+                        st.warning(
+                            "At least one fold has fewer than 10 Cox cancellation events per coefficient; "
+                            "interpret its Cox scores as exploratory."
+                        )
+        else:
+            st.info("Run rolling validation to see how model performance changes across signup cohorts.")
 else:
     st.info("The dashboard is ready. Choose a CSV in the sidebar to compare LTV by acquisition source.")
