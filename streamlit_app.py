@@ -476,7 +476,8 @@ if data is not None:
                     "Billing assumptions: uses row-level step/price when present; the built-in defaults are "
                     "$15 charged monthly and $150 charged annually. Revenue at horizon H includes charges "
                     "scheduled before H, not at H; taxes, refunds, and servicing costs are excluded unless "
-                    "already reflected in price."
+                    "already reflected in price. Subscription termination is based on ended_at (canceled_at "
+                    "is not used); payment-failure renewals follow a separate eligibility rule."
                 )
                 if validation_summary["cox_events_per_parameter"] < 10:
                     st.warning(
