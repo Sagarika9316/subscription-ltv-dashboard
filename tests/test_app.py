@@ -9,6 +9,7 @@ from ltv_models import (
     survival_ltv_forecast,
 )
 from survival_models import cox_survival_forecast
+from survival_models import evaluate_survival_models
 from streamlit_app import compute_ltv_summary
 
 
@@ -135,3 +136,40 @@ def test_cox_survival_forecast_returns_horizon_ltv_by_source():
     assert set(at_12_months["source"]) == {"email", "paid"}
     assert (at_12_months["cox_ltv"] > 0).all()
     assert (at_12_months["n"] == 40).all()
+
+
+def test_time_based_model_evaluation_scores_mature_holdout():
+    rows = []
+    train_start = pd.Timestamp("2024-01-01")
+    holdout_dates = [pd.Timestamp("2024-08-01"), pd.Timestamp("2024-09-01")]
+    for index in range(128):
+        is_holdout = index >= 80
+        source = "email" if index % 2 == 0 else "paid"
+        plan = "monthly" if index % 4 < 2 else "annual"
+        created = holdout_dates[(index // 2) % 2] if is_holdout else train_start
+        has_ended = index % 3 == 0
+        ended = created + pd.DateOffset(months=2) if has_ended else pd.NaT
+        rows.append(
+            {
+                "source": source,
+                "plan": plan,
+                "step": 1 if plan == "monthly" else 12,
+                "price": 15 if plan == "monthly" else 150,
+                "created_at": created,
+                "ended_at": ended,
+                "end_reason": "voluntary" if has_ended else None,
+            }
+        )
+
+    summary, by_source = evaluate_survival_models(
+        pd.DataFrame(rows), pd.Timestamp("2024-12-31"), horizon=3
+    )
+
+    assert summary["train_n"] == 80
+    assert summary["scored_n"] == 48
+    assert summary["coverage"] == 1
+    assert summary["km_mae"] >= 0
+    assert summary["cox_mae"] >= 0
+    assert summary["km_rmse"] >= 0
+    assert summary["cox_rmse"] >= 0
+    assert len(by_source) == 2

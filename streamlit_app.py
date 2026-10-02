@@ -14,7 +14,7 @@ from ltv_models import (
     survival_ltv_forecast,
 )
 from utils import ASOF, HORIZONS, build_eligibility, mature_at, revenue_at
-from survival_models import cox_survival_forecast
+from survival_models import cox_survival_forecast, evaluate_survival_models
 
 
 st.set_page_config(
@@ -410,5 +410,106 @@ if data is not None:
                 st.info("There is not enough supported follow-up for this Cox estimate.")
             else:
                 st.bar_chart(cox_view["cox_ltv"].sort_values(ascending=False))
+
+    with st.expander("Out-of-time model validation"):
+        st.caption(
+            "Trains on earlier signup cohorts and scores a later, fully mature holdout. "
+            "Uses selected sources and plans, but the cohort-date filter is intentionally not applied. "
+            "MAE and RMSE are in revenue units; lower is better. Negative Cox-minus-KM MAE favors Cox."
+        )
+        validation_horizon = st.select_slider(
+            "Validation horizon (months)",
+            options=HORIZONS,
+            value=6 if 6 in HORIZONS else HORIZONS[0],
+        )
+        validation_data = df[
+            df["source"].isin(source_filter) & df["plan"].isin(plan_filter)
+        ].copy()
+        validation_signature = (
+            validation_horizon,
+            str(asof_ts),
+            tuple(sorted(source_filter)),
+            tuple(sorted(plan_filter)),
+            len(validation_data),
+            str(validation_data["created_at"].min()),
+            str(validation_data["created_at"].max()),
+        )
+
+        if st.button("Run validation", key="run_survival_validation"):
+            try:
+                with st.spinner("Fitting models and scoring the time-based holdout..."):
+                    validation_summary, validation_by_source = evaluate_survival_models(
+                        validation_data,
+                        asof_ts,
+                        validation_horizon,
+                    )
+                st.session_state["survival_validation_result"] = {
+                    "signature": validation_signature,
+                    "summary": validation_summary,
+                    "by_source": validation_by_source,
+                    "error": None,
+                }
+            except (ConvergenceError, ValueError) as error:
+                st.session_state["survival_validation_result"] = {
+                    "signature": validation_signature,
+                    "summary": None,
+                    "by_source": None,
+                    "error": str(error),
+                }
+
+        validation_result = st.session_state.get("survival_validation_result")
+        if validation_result and validation_result["signature"] == validation_signature:
+            if validation_result["error"]:
+                st.warning(f"Validation unavailable: {validation_result['error']}")
+            else:
+                validation_summary = validation_result["summary"]
+                st.caption(
+                    f"Training through {validation_summary['train_cutoff']:%Y-%m-%d} "
+                    f"({validation_summary['train_n']:,} customers, "
+                    f"{validation_summary['train_events']:,} cancellations); holdout "
+                    f"{validation_summary['test_start']:%Y-%m-%d} to "
+                    f"{validation_summary['test_end']:%Y-%m-%d}. "
+                    f"Scored {validation_summary['scored_n']:,} of "
+                    f"{validation_summary['holdout_n']:,} mature customers."
+                )
+                mae_km, mae_cox, rmse_km, rmse_cox = st.columns(4)
+                mae_km.metric("Kaplan–Meier MAE", f"{validation_summary['km_mae']:,.2f}")
+                mae_cox.metric("Cox PH MAE", f"{validation_summary['cox_mae']:,.2f}")
+                rmse_km.metric("Kaplan–Meier RMSE", f"{validation_summary['km_rmse']:,.2f}")
+                rmse_cox.metric("Cox PH RMSE", f"{validation_summary['cox_rmse']:,.2f}")
+                st.metric(
+                    "Cox − Kaplan–Meier MAE",
+                    f"{validation_summary['cox_minus_km_mae']:+,.2f}",
+                    delta=(
+                        "95% month-block CI "
+                        f"[{validation_summary['delta_mae_ci_low']:+,.2f}, "
+                        f"{validation_summary['delta_mae_ci_high']:+,.2f}]"
+                    ),
+                    delta_color="off",
+                )
+                if validation_summary["cox_mae"] < validation_summary["km_mae"]:
+                    result_note = "Cox has lower MAE on this holdout."
+                else:
+                    result_note = "Kaplan–Meier has lower MAE on this holdout."
+                if validation_summary["cox_rmse"] > validation_summary["km_rmse"]:
+                    result_note += " Cox has higher RMSE, so the result is mixed."
+                st.info(result_note)
+                st.dataframe(
+                    validation_result["by_source"].rename(
+                        columns={
+                            "source": "Source",
+                            "customers": "Customers",
+                            "actual_ltv": "Actual LTV",
+                            "km_ltv": "KM prediction",
+                            "cox_ltv": "Cox prediction",
+                            "km_mae": "KM MAE",
+                            "cox_mae": "Cox MAE",
+                        }
+                    ),
+                    hide_index=True,
+                    width="stretch",
+                )
+        else:
+            st.info("Choose a validation horizon and run the holdout comparison.")
 else:
     st.info("The dashboard is ready. Choose a CSV in the sidebar to compare LTV by acquisition source.")
