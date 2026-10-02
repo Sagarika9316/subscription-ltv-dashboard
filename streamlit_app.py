@@ -466,6 +466,39 @@ if data is not None:
             "The default 1.0x threshold only means gross LTV covers CAC; it excludes service costs, refunds, and other costs."
         )
 
+    st.subheader("Business readout for the current filters")
+    ltv_leader = ltv_view.iloc[0]
+    st.markdown(
+        f"**Which source leads on {h}-month gross LTV?** {ltv_view.index[0]} "
+        f"({metric_view}, {ltv_leader['ltv']:,.2f}; {int(ltv_leader['n']):,} mature customers; "
+        f"{confidence_level:.0%} interval {ltv_leader['ci_low']:,.2f}–{ltv_leader['ci_high']:,.2f})."
+    )
+    if not has_cac:
+        cac_answer = "CAC comparison is unavailable because no positive CAC values are entered."
+    elif candidates.empty:
+        cac_answer = "No source has both an entered positive CAC and a usable LTV confidence interval."
+    elif passing_candidates.empty:
+        cac_answer = (
+            f"No source clears the {minimum_gross_ltv_cac:.1f}x lower-bound gross LTV:CAC screen."
+        )
+    else:
+        cac_candidate = passing_candidates.iloc[0]
+        cac_basis = (
+            "illustrative static CAC assumptions"
+            if use_static_cac
+            else "manually entered CAC values"
+        )
+        cac_answer = (
+            f"{cac_candidate['source']} is the leading controlled-test candidate using {cac_basis}; "
+            f"its lower-bound gross LTV:CAC is {cac_candidate['lower_bound_gross_ltv_cac']:.2f}x."
+        )
+    st.markdown(f"**Does any source clear the CAC screen?** {cac_answer}")
+    st.info(
+        "Does this prove we should increase spend? No. This dataset has no randomized treatment/control "
+        "outcomes or verified contribution costs. Use the candidate to design a controlled test; do not treat "
+        "gross LTV:CAC as net profit or causal lift."
+    )
+
     with st.expander("Plan an incrementality experiment"):
         st.caption(
             "This plans a randomized test of paid-subscription conversion. Your subscription CSV has no eligible "
