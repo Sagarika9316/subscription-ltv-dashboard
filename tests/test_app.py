@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from app import build_eligibility
 from ltv_models import (
@@ -173,3 +174,36 @@ def test_time_based_model_evaluation_scores_mature_holdout():
     assert summary["km_rmse"] >= 0
     assert summary["cox_rmse"] >= 0
     assert len(by_source) == 2
+
+
+def test_time_based_evaluation_rejects_uninformative_constant_holdout():
+    rows = []
+    train_start = pd.Timestamp("2022-01-01")
+    test_start = pd.Timestamp("2023-08-01")
+    for index in range(120):
+        is_holdout = index >= 80
+        source = "email" if index % 2 == 0 else "paid"
+        if is_holdout:
+            created = test_start + pd.DateOffset(days=index - 80)
+            plan = "annual"
+            ended = created + pd.DateOffset(months=6) if index % 3 == 0 else pd.NaT
+        else:
+            created = train_start
+            plan = "monthly" if index % 4 < 2 else "annual"
+            ended = created + pd.DateOffset(months=3 + index % 5) if index % 3 == 0 else pd.NaT
+        rows.append(
+            {
+                "source": source,
+                "plan": plan,
+                "step": 1 if plan == "monthly" else 12,
+                "price": 15 if plan == "monthly" else 150,
+                "created_at": created,
+                "ended_at": ended,
+                "end_reason": "voluntary" if pd.notna(ended) else None,
+            }
+        )
+
+    with pytest.raises(ValueError, match="zero MAE/RMSE is not informative"):
+        evaluate_survival_models(
+            pd.DataFrame(rows), pd.Timestamp("2025-01-03"), horizon=12
+        )

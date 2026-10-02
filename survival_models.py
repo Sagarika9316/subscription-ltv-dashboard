@@ -156,6 +156,15 @@ def evaluate_survival_models(df, asof, horizon, n_bootstrap=500):
     actual = scored["actual"].to_numpy()
     km_error = scored["km_prediction"].to_numpy() - actual
     cox_error = scored["cox_prediction"].to_numpy() - actual
+    if (
+        np.ptp(actual) <= 1e-9
+        and np.allclose(km_error, 0)
+        and np.allclose(cox_error, 0)
+    ):
+        raise ValueError(
+            "Holdout revenue is constant and both models predict it exactly, so zero MAE/RMSE is not informative. "
+            "Choose a plan and horizon that include renewal revenue or customer-level variation."
+        )
     delta_abs_error = np.abs(cox_error) - np.abs(km_error)
 
     monthly = scored.groupby(scored["created_at"].dt.to_period("M"))["actual"].agg(
