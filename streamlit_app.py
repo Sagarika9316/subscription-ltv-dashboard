@@ -20,6 +20,7 @@ from utils import (
     build_eligibility,
     mature_at,
     normalize_subscription_dataframe,
+    contribution_at,
     revenue_at,
 )
 from survival_models import (
@@ -271,6 +272,31 @@ if data is not None:
         ltv_view["ltv_minus_cac"] = np.nan
         ltv_view["payback"] = ""
 
+    has_contribution = "net_contribution_per_charge" in filtered.columns
+    if has_contribution:
+        mature_mask = mature_at(filtered, h, asof=asof_ts)
+        contribution_values = contribution_at(filtered, paid, h)
+        contribution_data = pd.DataFrame(
+            {
+                "source": filtered.loc[mature_mask, "source"],
+                "contribution_ltv": contribution_values[mature_mask],
+            }
+        )
+        contribution_by_source = contribution_data.groupby("source")[
+            "contribution_ltv"
+        ].agg(statistic)
+        ltv_view = ltv_view.join(contribution_by_source)
+        ltv_view["contribution_minus_cac"] = (
+            ltv_view["contribution_ltv"] - ltv_view["cac"]
+        )
+        ltv_view["contribution_ltv_cac"] = (
+            ltv_view["contribution_ltv"] / ltv_view["cac"]
+        )
+    else:
+        ltv_view["contribution_ltv"] = np.nan
+        ltv_view["contribution_minus_cac"] = np.nan
+        ltv_view["contribution_ltv_cac"] = np.nan
+
     forecast = survival_ltv_forecast(filtered, asof_ts, available_horizons)
     forecast_view = forecast[forecast["H"] == h].set_index("source")
     if forecast_view.empty:
@@ -307,6 +333,9 @@ if data is not None:
             "ltv_cac",
             "ltv_minus_cac",
             "payback",
+            "contribution_ltv",
+            "contribution_minus_cac",
+            "contribution_ltv_cac",
             "forecast_ltv",
             "forecast_n",
             "cox_ltv",
@@ -322,6 +351,9 @@ if data is not None:
             "ltv_cac": "LTV:CAC",
             "ltv_minus_cac": "LTV - CAC",
             "payback": "Observed payback",
+            "contribution_ltv": "Contribution LTV",
+            "contribution_minus_cac": "Contribution - CAC",
+            "contribution_ltv_cac": "Contribution:CAC",
             "forecast_ltv": "Kaplan–Meier LTV",
             "forecast_n": "KM N",
             "cox_ltv": "Cox PH LTV",
@@ -330,6 +362,16 @@ if data is not None:
     )
     st.dataframe(comparison, width="stretch")
     st.caption("Blank CAC columns mean no positive CAC has been entered. Blank forecast cells mean one or more plan segments lack sufficient follow-up.")
+    if has_contribution:
+        st.caption(
+            "Contribution LTV uses net_contribution_per_charge for each eligible billing event. "
+            "Survival forecasts remain gross-revenue forecasts."
+        )
+    else:
+        st.info(
+            "Contribution LTV is unavailable because the CSV has no "
+            "'net_contribution_per_charge' column. Supply per-charge revenue after variable costs and allocated refunds; no zero-cost assumption is made."
+        )
 
     st.markdown("**Model assumptions and sample coverage**")
     observed_notes, economics_notes, km_notes, cox_notes = st.columns(4)
@@ -346,7 +388,7 @@ if data is not None:
         "Cox PH adjusts for source and plan; assumes proportional hazards. Associations are not causal effects."
     )
 
-    ltv_chart, net_chart = st.columns(2)
+    ltv_chart, net_chart, contribution_chart = st.columns(3)
     with ltv_chart:
         st.subheader("Observed LTV by source")
         st.bar_chart(ltv_view["ltv"].sort_values(ascending=False))
@@ -358,6 +400,12 @@ if data is not None:
         else:
             st.bar_chart(net_ltv)
         st.caption("Revenue less acquisition cost; excludes servicing and other costs.")
+    with contribution_chart:
+        st.subheader("Contribution LTV by source")
+        if has_contribution:
+            st.bar_chart(ltv_view["contribution_ltv"].dropna().sort_values(ascending=False))
+        else:
+            st.info("Add net contribution per charge to compare sources.")
 
     st.subheader("Detailed LTV table")
     detail = res[(res["H"] == h)].pivot(index="source", columns="plan", values="ltv").round(2)

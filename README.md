@@ -21,3 +21,13 @@ Running the script produces:
 - `subscription_survival.png`
 
 The script calculates renewal eligibility and cohort-level LTV for several time horizons.
+
+## Optional contribution-margin input
+
+The Streamlit dashboard can also show contribution LTV when the CSV includes
+`net_contribution_per_charge`. This is the net amount per successful scheduled
+charge after variable service/payment costs and refunds allocated to that
+charge. Use the same currency as `price`; do not subtract CAC in this field,
+because CAC is compared separately. If the column is absent, contribution LTV
+is marked unavailable rather than assuming zero costs. Kaplan-Meier and Cox
+forecasts remain gross-revenue forecasts.

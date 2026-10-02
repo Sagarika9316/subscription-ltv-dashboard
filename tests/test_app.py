@@ -13,7 +13,7 @@ from ltv_models import (
 from survival_models import cox_survival_forecast
 from survival_models import evaluate_survival_models, evaluate_survival_models_rolling
 from streamlit_app import compute_ltv_summary
-from utils import normalize_subscription_dataframe
+from utils import contribution_at, normalize_subscription_dataframe
 
 
 def test_build_eligibility_works_without_read_only_errors():
@@ -68,6 +68,7 @@ def test_normalization_preserves_row_level_billing_values():
             "plan": ["monthly", "annual"],
             "step": [1, 12],
             "price": [19.5, 180],
+            "net_contribution_per_charge": [8.5, 92],
             "created_at": ["2025-01-01", "2025-01-01"],
             "ended_at": [None, None],
             "end_reason": [None, None],
@@ -78,6 +79,7 @@ def test_normalization_preserves_row_level_billing_values():
 
     assert normalized["price"].tolist() == [19.5, 180.0]
     assert normalized["step"].tolist() == [1, 12]
+    assert normalized["net_contribution_per_charge"].tolist() == [8.5, 92.0]
     assert normalized.attrs["normalization_assumptions"] == []
 
 
@@ -133,6 +135,33 @@ def test_normalization_rejects_ended_subscription_without_reason():
 
     with pytest.raises(ValueError, match="must have an 'end_reason'"):
         normalize_subscription_dataframe(df)
+
+
+def test_contribution_at_uses_paid_charges_and_billing_schedule():
+    df = pd.DataFrame(
+        {
+            "source": ["email", "paid"],
+            "plan": ["monthly", "annual"],
+            "step": [1, 12],
+            "price": [15, 150],
+            "net_contribution_per_charge": [8, 60],
+        }
+    )
+    paid = np.zeros((2, 38), dtype=bool)
+    paid[0, :3] = True
+    paid[1, :2] = True
+
+    result = contribution_at(df, paid, 3)
+
+    assert result.tolist() == [24.0, 60.0]
+
+
+def test_contribution_at_requires_explicit_cost_adjusted_values():
+    df = pd.DataFrame({"step": [1], "price": [15]})
+    paid = np.zeros((1, 38), dtype=bool)
+
+    with pytest.raises(ValueError, match="requires a 'net_contribution_per_charge'"):
+        contribution_at(df, paid, 1)
 
 
 def test_bootstrap_confidence_interval_is_deterministic_and_handles_constant_values():

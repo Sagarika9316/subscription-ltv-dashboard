@@ -99,6 +99,18 @@ def normalize_subscription_dataframe(df):
                 raise ValueError("Subscription prices in 'price' must not be negative.")
             df[column] = numeric.astype(float)
 
+    contribution_column = "net_contribution_per_charge"
+    if contribution_column in df:
+        original = df[contribution_column]
+        numeric = pd.to_numeric(original, errors="coerce")
+        if (original.notna() & numeric.isna()).any() or numeric.isna().any():
+            raise ValueError(
+                f"The '{contribution_column}' column must contain numeric values for every subscription."
+            )
+        if not np.isfinite(numeric.to_numpy(dtype=float)).all():
+            raise ValueError(f"The '{contribution_column}' column must contain finite values.")
+        df[contribution_column] = numeric.astype(float)
+
     df.attrs["normalization_assumptions"] = assumptions
     return df
 
@@ -139,6 +151,14 @@ def build_eligibility(df, asof=ASOF):
 def revenue_at(df, paid, H):
     in_window = (np.arange(K)[None, :] * df["step"].to_numpy()[:, None]) < H
     return (paid & in_window).sum(axis=1) * df["price"].to_numpy()
+
+
+def contribution_at(df, paid, H):
+    column = "net_contribution_per_charge"
+    if column not in df:
+        raise ValueError(f"Contribution LTV requires a '{column}' column.")
+    in_window = (np.arange(K)[None, :] * df["step"].to_numpy()[:, None]) < H
+    return (paid & in_window).sum(axis=1) * df[column].to_numpy()
 
 
 def mature_at(df, H, asof=ASOF):
