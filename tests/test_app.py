@@ -253,7 +253,10 @@ def test_gross_ltv_cac_candidates_rank_conservatively_and_exclude_missing_costs(
     assert ranked["source"].tolist() == ["strong lower bound", "high point"]
     assert ranked.loc[0, "gross_ltv_cac"] == 3
     assert ranked.loc[0, "lower_bound_gross_ltv_cac"] == 2.4
-    assert ranked.loc[0, "lower_bound_covers_cac"]
+    assert ranked.loc[0, "passes_gross_screen"]
+
+    stricter = rank_gross_ltv_cac_candidates(summary, minimum_ratio=2.5)
+    assert not stricter["passes_gross_screen"].any()
 
 
 def test_experiment_sample_size_uses_two_arm_conversion_inputs():

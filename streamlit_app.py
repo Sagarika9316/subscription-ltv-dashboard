@@ -391,15 +391,26 @@ if data is not None:
     st.caption("Blank CAC columns mean no positive CAC has been entered. Blank forecast cells mean one or more plan segments lack sufficient follow-up.")
 
     st.subheader("Candidate for a controlled investment test")
-    candidates = rank_gross_ltv_cac_candidates(ltv_view.reset_index())
+    minimum_gross_ltv_cac = st.number_input(
+        "Minimum lower-bound gross LTV:CAC for test screen",
+        min_value=0.1,
+        value=1.0,
+        step=0.1,
+        format="%.1f",
+        help="1.0x means the lower confidence bound of gross LTV only equals CAC; it does not cover other costs.",
+    )
+    candidates = rank_gross_ltv_cac_candidates(
+        ltv_view.reset_index(), minimum_ratio=minimum_gross_ltv_cac
+    )
     if candidates.empty:
         st.info(
             "Enter a positive CAC for at least one selected source to rank investment-test candidates."
         )
     else:
         candidate = candidates.iloc[0]
+        passing_candidates = candidates[candidates["passes_gross_screen"]]
         candidate_metrics = st.columns(5)
-        candidate_metrics[0].metric("Candidate source", candidate["source"])
+        candidate_metrics[0].metric("Top conservative candidate", candidate["source"])
         candidate_metrics[1].metric("Entered CAC", f"{candidate['cac']:,.2f}")
         candidate_metrics[2].metric(
             "Observed gross LTV:CAC", f"{candidate['gross_ltv_cac']:.2f}x"
@@ -411,18 +422,23 @@ if data is not None:
         candidate_metrics[4].metric("Mature customers", f"{int(candidate['n']):,}")
         st.caption(
             f"Observed payback at selected mature horizons: {candidate['payback'] or 'not reached'}. "
-            "Ranking favors the strongest lower confidence bound, with mature sample size as a tie-breaker."
+            "Ranking uses the lower confidence bound of gross LTV:CAC, with mature sample size as a tie-breaker."
         )
-        if candidate["lower_bound_covers_cac"]:
-            st.info(
-                f"{candidate['source']} is the leading source to test: its lower-bound gross LTV exceeds entered CAC "
-                "at this horizon. This is not net profit or evidence that more spend will cause growth."
+        if not passing_candidates.empty:
+            passing_source = passing_candidates.iloc[0]["source"]
+            st.success(
+                f"{passing_source} clears the {minimum_gross_ltv_cac:.1f}x gross LTV:CAC screen: "
+                "candidate for a controlled incrementality test, not an instruction to scale spend."
             )
         else:
             st.warning(
-                f"{candidate['source']} ranks highest among sources with CAC entered, but its lower-bound gross LTV "
-                "does not cover CAC at this horizon. Treat it as a test candidate, not a scale-up recommendation."
+                f"No source clears the {minimum_gross_ltv_cac:.1f}x conservative gross LTV:CAC screen. "
+                "Do not recommend increased spend from these results. The top-ranked source is a hypothesis only."
             )
+        st.caption(
+            "This screen assumes entered CAC is accurate and uses gross revenue, not contribution profit. "
+            "The default 1.0x threshold only means gross LTV covers CAC; it excludes service costs, refunds, and other costs."
+        )
 
     with st.expander("Plan an incrementality experiment"):
         st.caption(

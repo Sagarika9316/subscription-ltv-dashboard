@@ -75,7 +75,9 @@ def add_ltv_cac_ratio(ltv_by_source, cac_by_source):
     return result
 
 
-def rank_gross_ltv_cac_candidates(source_summary):
+def rank_gross_ltv_cac_candidates(source_summary, minimum_ratio=1.0):
+    if not np.isfinite(minimum_ratio) or minimum_ratio <= 0:
+        raise ValueError("minimum_ratio must be a positive finite number.")
     required = {"source", "ltv", "ci_low", "cac", "n"}
     missing = required - set(source_summary.columns)
     if missing:
@@ -94,7 +96,9 @@ def rank_gross_ltv_cac_candidates(source_summary):
     candidates["gross_ltv_cac"] = candidates["ltv"] / candidates["cac"]
     candidates["lower_bound_gross_ltv_cac"] = candidates["ci_low"] / candidates["cac"]
     candidates["gross_ltv_minus_cac"] = candidates["ltv"] - candidates["cac"]
-    candidates["lower_bound_covers_cac"] = candidates["lower_bound_gross_ltv_cac"] >= 1
+    candidates["passes_gross_screen"] = (
+        candidates["lower_bound_gross_ltv_cac"] >= minimum_ratio
+    )
     return candidates.sort_values(
         ["lower_bound_gross_ltv_cac", "n"],
         ascending=[False, False],
