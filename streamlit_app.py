@@ -5,6 +5,7 @@ matplotlib.use("Agg")
 import numpy as np
 import pandas as pd
 import streamlit as st
+from lifelines.exceptions import ConvergenceError
 
 from ltv_models import (
     add_ltv_cac_ratio,
@@ -13,6 +14,7 @@ from ltv_models import (
     survival_ltv_forecast,
 )
 from utils import ASOF, HORIZONS, build_eligibility, mature_at, revenue_at
+from survival_models import cox_survival_forecast
 
 
 st.set_page_config(
@@ -275,6 +277,21 @@ if data is not None:
             forecast_view[["forecast_ltv", "n"]].rename(columns={"n": "forecast_n"})
         )
 
+    cox_error = None
+    try:
+        cox_forecast = cox_survival_forecast(filtered, asof_ts, available_horizons)
+    except (ConvergenceError, ValueError) as error:
+        cox_forecast = pd.DataFrame(columns=["source", "H", "cox_ltv", "n"])
+        cox_error = str(error)
+    cox_view = cox_forecast[cox_forecast["H"] == h].set_index("source")
+    if cox_view.empty:
+        ltv_view["cox_ltv"] = np.nan
+        ltv_view["cox_n"] = np.nan
+    else:
+        ltv_view = ltv_view.join(
+            cox_view[["cox_ltv", "n"]].rename(columns={"n": "cox_n"})
+        )
+
     st.subheader(f"Model comparison at {h} {horizon_unit}")
     comparison = ltv_view[
         [
@@ -288,6 +305,8 @@ if data is not None:
             "payback",
             "forecast_ltv",
             "forecast_n",
+            "cox_ltv",
+            "cox_n",
         ]
     ].rename(
         columns={
@@ -299,23 +318,28 @@ if data is not None:
             "ltv_cac": "LTV:CAC",
             "ltv_minus_cac": "LTV - CAC",
             "payback": "Observed payback",
-            "forecast_ltv": "Forecast LTV",
-            "forecast_n": "Forecast N",
+            "forecast_ltv": "Kaplan–Meier LTV",
+            "forecast_n": "KM N",
+            "cox_ltv": "Cox PH LTV",
+            "cox_n": "Cox N",
         }
     )
     st.dataframe(comparison, width="stretch")
     st.caption("Blank CAC columns mean no positive CAC has been entered. Blank forecast cells mean one or more plan segments lack sufficient follow-up.")
 
     st.markdown("**Model assumptions and sample coverage**")
-    observed_notes, economics_notes, forecast_notes = st.columns(3)
+    observed_notes, economics_notes, km_notes, cox_notes = st.columns(4)
     observed_notes.caption(
         f"Observed LTV uses fully mature customers at {h} months; interval is bootstrap-based. Observed N is shown per source."
     )
     economics_notes.caption(
         "LTV:CAC uses entered source-level costs. Payback is the first selected mature horizon where mean observed revenue covers CAC."
     )
-    forecast_notes.caption(
-        "Forecast uses Kaplan–Meier retention by source and plan; Forecast N counts customers in supported segments and is not realized LTV."
+    km_notes.caption(
+        "Kaplan–Meier is the non-parametric retention baseline. Its forecast is not realized LTV."
+    )
+    cox_notes.caption(
+        "Cox PH adjusts for source and plan; assumes proportional hazards. Associations are not causal effects."
     )
 
     ltv_chart, net_chart = st.columns(2)
@@ -366,15 +390,25 @@ if data is not None:
     )
 
     st.divider()
-    st.subheader("Forecast by source")
+    st.subheader("Survival model forecasts")
     st.caption(
-        "Modelled expected revenue uses Kaplan–Meier retention and observed billing prices. "
-        "Forecasts are limited to horizons within observed follow-up and are not realized LTV."
+        "Both models use right-censored subscription durations and observed billing prices. Forecasts are not realized LTV."
     )
     forecast_view = forecast_view.sort_values("forecast_ltv", ascending=False)
     if forecast_view.empty:
         st.info("There is not enough observed follow-up for this source and horizon.")
     else:
-        st.bar_chart(forecast_view["forecast_ltv"])
+        km_chart, cox_chart = st.columns(2)
+        with km_chart:
+            st.markdown("**Kaplan–Meier baseline**")
+            st.bar_chart(forecast_view["forecast_ltv"])
+        with cox_chart:
+            st.markdown("**Cox proportional hazards**")
+            if cox_error:
+                st.warning(f"Cox model unavailable: {cox_error}")
+            elif cox_view.empty:
+                st.info("There is not enough supported follow-up for this Cox estimate.")
+            else:
+                st.bar_chart(cox_view["cox_ltv"].sort_values(ascending=False))
 else:
     st.info("The dashboard is ready. Choose a CSV in the sidebar to compare LTV by acquisition source.")

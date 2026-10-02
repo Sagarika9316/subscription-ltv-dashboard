@@ -8,6 +8,7 @@ from ltv_models import (
     estimate_observed_payback,
     survival_ltv_forecast,
 )
+from survival_models import cox_survival_forecast
 from streamlit_app import compute_ltv_summary
 
 
@@ -106,3 +107,31 @@ def test_survival_forecast_uses_plan_billing_cadence_and_observed_support():
     recent["created_at"] = pd.Timestamp("2024-11-30")
     supported = survival_ltv_forecast(recent, asof, [1, 3])
     assert supported["H"].tolist() == [1]
+
+
+def test_cox_survival_forecast_returns_horizon_ltv_by_source():
+    rows = []
+    created = pd.Timestamp("2020-01-01")
+    for index in range(80):
+        source = "email" if index % 2 == 0 else "paid"
+        plan = "monthly" if index % 4 < 2 else "annual"
+        ended = created + pd.DateOffset(months=5 + index % 18) if index % 3 == 0 else pd.NaT
+        rows.append(
+            {
+                "source": source,
+                "plan": plan,
+                "step": 1 if plan == "monthly" else 12,
+                "price": 15 if plan == "monthly" else 150,
+                "created_at": created,
+                "ended_at": ended,
+            }
+        )
+
+    result = cox_survival_forecast(
+        pd.DataFrame(rows), pd.Timestamp("2024-12-31"), [1, 3, 12]
+    )
+
+    at_12_months = result[result["H"] == 12]
+    assert set(at_12_months["source"]) == {"email", "paid"}
+    assert (at_12_months["cox_ltv"] > 0).all()
+    assert (at_12_months["n"] == 40).all()
