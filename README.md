@@ -68,3 +68,11 @@ arms. The subscription dataset has no exposed-prospect denominator, treatment
 assignment, or experiment outcome, so these values must come from campaign or
 experiment records. The planner sizes a test; it does not estimate causal lift
 or recommend increasing spend.
+
+When a positive CAC is available for the selected source, the planner also
+shows an illustrative value-after-CAC scenario at the target lift. It assumes
+the lift is achieved and CAC per acquired subscriber stays constant. If
+`net_contribution_per_charge` is present it uses contribution LTV; otherwise it
+uses gross LTV and labels the result **not profit**. This scenario is not an
+observed experiment outcome and does not include unmodeled changes in media
+spend, costs, or conversion behavior.

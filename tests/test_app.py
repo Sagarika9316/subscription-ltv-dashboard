@@ -4,7 +4,10 @@ import pytest
 
 from app import build_eligibility
 from cohort_models import cohort_churn_summary, cohort_retention_matrix
-from experiment_models import two_proportion_sample_size
+from experiment_models import (
+    estimate_incremental_value_at_lift,
+    two_proportion_sample_size,
+)
 from experiment_models import two_proportion_sample_size
 from ltv_models import (
     add_ltv_cac_ratio,
@@ -283,6 +286,20 @@ def test_experiment_sample_size_rejects_invalid_conversion_inputs():
         two_proportion_sample_size(0, 0.01)
     with pytest.raises(ValueError, match="Minimum lift"):
         two_proportion_sample_size(0.99, 0.02)
+
+
+def test_experiment_economics_estimates_value_after_assumed_cac():
+    result = estimate_incremental_value_at_lift(
+        sample_per_arm=10000,
+        absolute_lift=0.01,
+        value_per_subscriber=200,
+        cac_per_subscriber=30,
+    )
+
+    assert result["incremental_subscribers"] == 100
+    assert result["incremental_value"] == 20000
+    assert result["incremental_cac"] == 3000
+    assert result["value_after_cac"] == 17000
 
 
 def test_static_cac_assumptions_are_labeled_examples():

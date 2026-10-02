@@ -8,7 +8,10 @@ import streamlit as st
 from lifelines.exceptions import ConvergenceError
 
 from cohort_models import cohort_churn_summary, cohort_retention_matrix
-from experiment_models import two_proportion_sample_size
+from experiment_models import (
+    estimate_incremental_value_at_lift,
+    two_proportion_sample_size,
+)
 from ltv_models import (
     add_ltv_cac_ratio,
     estimate_observed_payback,
@@ -593,9 +596,48 @@ if data is not None:
                         st.success("The entered audience meets the approximate sample-size target.")
                 source_cac = pd.to_numeric(cac_inputs.loc[cac_inputs["source"] == test_source, "cac"], errors="coerce")
                 if not source_cac.empty and source_cac.iloc[0] > 0:
+                    scenario_per_arm = (
+                        int(available_per_arm)
+                        if available_per_arm > 0
+                        else required_per_arm
+                    )
+                    source_result = ltv_view.loc[test_source]
+                    has_source_contribution = (
+                        has_contribution
+                        and pd.notna(source_result["contribution_ltv"])
+                    )
+                    value_per_subscriber = (
+                        float(source_result["contribution_ltv"])
+                        if has_source_contribution
+                        else float(source_result["ltv"])
+                    )
+                    economics = estimate_incremental_value_at_lift(
+                        sample_per_arm=scenario_per_arm,
+                        absolute_lift=minimum_lift_pp / 100,
+                        value_per_subscriber=value_per_subscriber,
+                        cac_per_subscriber=float(source_cac.iloc[0]),
+                    )
+                    value_label = (
+                        "Illustrative contribution after CAC"
+                        if has_source_contribution
+                        else "Illustrative gross value after CAC (not profit)"
+                    )
+                    st.metric(
+                        value_label,
+                        f"{economics['value_after_cac']:,.2f} {df['currency'].iloc[0]}",
+                    )
                     st.caption(
-                        f"Manually entered CAC for {test_source}: {source_cac.iloc[0]:,.2f}. "
-                        "Use realized incremental spend and outcomes to evaluate the experiment; CAC is not used in this sample-size calculation."
+                        f"At the target lift, this scenario assumes about "
+                        f"{economics['incremental_subscribers']:,.1f} additional subscribers across "
+                        f"{scenario_per_arm:,} prospects per arm. It uses "
+                        f"{('contribution LTV' if has_source_contribution else 'gross LTV')} at the selected horizon and "
+                        f"CAC {source_cac.iloc[0]:,.2f} per incremental subscriber, held constant as spend scales. "
+                        "This is a scenario, not an observed experiment result; use actual arm-level spend and outcomes to decide."
+                    )
+                else:
+                    st.info(
+                        f"No positive CAC is entered for {test_source}; the planner can size the conversion test, "
+                        "but cannot estimate value after acquisition cost."
                     )
                 st.caption(
                     "Approximate normal-theory sample size; assumes independent users, no cluster randomization, "
