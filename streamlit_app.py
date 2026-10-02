@@ -558,6 +558,18 @@ if data is not None:
             step=100,
             help="Enter the reachable audience for the chosen randomization unit. Leave at 0 if unknown.",
         )
+        if not has_contribution:
+            assumed_contribution_margin_pct = st.slider(
+                "Illustrative contribution margin assumption (%)",
+                min_value=0,
+                max_value=100,
+                value=60,
+                step=5,
+                help="Hypothetical only; the subscription CSV contains no variable-cost data.",
+            )
+            st.caption(
+                "This margin is an example assumption, not measured cost data. Replace it with finance-validated contribution margin."
+            )
 
         if baseline_rate_pct is None or minimum_lift_pp is None or minimum_lift_pp == 0:
             st.info("Enter a historical conversion baseline and a positive minimum lift to calculate sample size.")
@@ -610,6 +622,8 @@ if data is not None:
                         float(source_result["contribution_ltv"])
                         if has_source_contribution
                         else float(source_result["ltv"])
+                        * assumed_contribution_margin_pct
+                        / 100
                     )
                     economics = estimate_incremental_value_at_lift(
                         sample_per_arm=scenario_per_arm,
@@ -620,19 +634,28 @@ if data is not None:
                     value_label = (
                         "Illustrative contribution after CAC"
                         if has_source_contribution
-                        else "Illustrative gross value after CAC (not profit)"
+                        else "Illustrative value after CAC (assumed margin)"
                     )
-                    st.metric(
+                    economics_metrics = st.columns(3)
+                    economics_metrics[0].metric(
+                        "Additional subscribers at target lift",
+                        f"{economics['incremental_subscribers']:,.1f}",
+                    )
+                    economics_metrics[1].metric(
+                        "Incremental CAC estimate",
+                        f"{economics['incremental_cac']:,.2f} {df['currency'].iloc[0]}",
+                    )
+                    economics_metrics[2].metric(
                         value_label,
                         f"{economics['value_after_cac']:,.2f} {df['currency'].iloc[0]}",
                     )
                     st.caption(
-                        f"At the target lift, this scenario assumes about "
-                        f"{economics['incremental_subscribers']:,.1f} additional subscribers across "
+                        f"Scenario at the {minimum_lift_pp:.2f}-percentage-point target lift and "
                         f"{scenario_per_arm:,} prospects per arm. It uses "
-                        f"{('contribution LTV' if has_source_contribution else 'gross LTV')} at the selected horizon and "
-                        f"CAC {source_cac.iloc[0]:,.2f} per incremental subscriber, held constant as spend scales. "
-                        "This is a scenario, not an observed experiment result; use actual arm-level spend and outcomes to decide."
+                        f"{('observed contribution LTV' if has_source_contribution else f'gross LTV × {assumed_contribution_margin_pct}% assumed margin')} "
+                        f"at the selected horizon and CAC {source_cac.iloc[0]:,.2f} per incremental subscriber, "
+                        "held constant as spend scales. This is not an observed experiment result or proven profit; "
+                        "use actual arm-level spend and contribution outcomes before deciding."
                     )
                 else:
                     st.info(
