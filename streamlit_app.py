@@ -5,21 +5,8 @@ matplotlib.use("Agg")
 import numpy as np
 import pandas as pd
 import streamlit as st
-from lifelines.exceptions import ConvergenceError
 
-from cohort_models import cohort_retention_matrix
-from ltv_models import (
-    add_ltv_cac_ratio,
-    estimate_observed_payback,
-    source_ltv_confidence_intervals,
-    survival_ltv_forecast,
-)
 from utils import ASOF, HORIZONS, build_eligibility, mature_at, revenue_at
-from survival_models import (
-    cox_survival_forecast,
-    evaluate_survival_models,
-    evaluate_survival_models_rolling,
-)
 
 
 st.set_page_config(
@@ -79,14 +66,6 @@ st.caption("Compare LTV across acquisition sources, plan types, and time horizon
 
 with st.sidebar:
     st.header("Controls")
-    st.markdown(
-        "**Observed LTV + interval**  \n"
-        "How much revenue did mature customers generate by this horizon, and how uncertain is the estimate?\n\n"
-        "**CAC + payback**  \n"
-        "How much LTV per acquisition dollar, and when does observed revenue cover CAC?\n\n"
-        "**Retention forecast**  \n"
-        "What cumulative revenue might historical retention imply through the selected horizon?"
-    )
     uploaded_file = st.file_uploader("Upload subscriptions CSV", type=["csv"])
     if uploaded_file is not None:
         data = pd.read_csv(uploaded_file, parse_dates=["created_at", "canceled_at", "ended_at"])
@@ -100,563 +79,75 @@ with st.sidebar:
         df = normalize_dataframe(data)
         asof = st.date_input("As-of date", value=pd.Timestamp(ASOF).date())
         asof_ts = pd.Timestamp(asof)
-        plan_options = sorted(df["plan"].dropna().unique().tolist())
-        plan_choice = st.selectbox(
-            "Plan type",
-            ["All"] + [plan.title() for plan in plan_options],
-        )
-        plan_filter = (
-            plan_options
-            if plan_choice == "All"
-            else [plan for plan in plan_options if plan.title() == plan_choice]
-        )
+        plan_filter = st.multiselect("Plan", sorted(df["plan"].dropna().unique().tolist()), default=sorted(df["plan"].dropna().unique().tolist()))
         source_filter = st.multiselect("Acquisition source", sorted(df["source"].dropna().unique().tolist()), default=sorted(df["source"].dropna().unique().tolist()))
-        cohort_start_default = df["created_at"].min().date()
-        cohort_end_default = df["created_at"].max().date()
-        cohort_range = st.date_input(
-            "Signup cohort dates",
-            value=(cohort_start_default, cohort_end_default),
-            min_value=cohort_start_default,
-            max_value=cohort_end_default,
-        )
-        cohort_start, cohort_end = cohort_range
-        horizon_candidates = df[
-            df["plan"].isin(plan_filter)
-            & df["source"].isin(source_filter)
-            & (df["created_at"] >= pd.Timestamp(cohort_start))
-            & (df["created_at"] < pd.Timestamp(cohort_end) + pd.DateOffset(days=1))
-        ]
-        horizon_filter = [
-            horizon
-            for horizon in HORIZONS
-            if mature_at(horizon_candidates, horizon, asof=asof_ts).any()
-        ]
-        if horizon_filter:
-            selected_horizon = 12 if 12 in horizon_filter else horizon_filter[-1]
-            h = st.select_slider(
-                "Time horizon (months)",
-                options=horizon_filter,
-                value=selected_horizon,
-            )
-        else:
-            h = None
-        min_users = st.slider(
-            "Minimum mature customers per source",
-            min_value=1,
-            max_value=1000,
-            value=1,
-        )
+        horizon_filter = st.multiselect("Time horizon (months)", options=HORIZONS, default=HORIZONS)
         metric_view = st.radio("Metric view", ["mean LTV", "median LTV"])
-        confidence_level = st.select_slider(
-            "Confidence interval",
-            options=[0.90, 0.95, 0.99],
-            value=0.95,
-            format_func=lambda value: f"{value:.0%}",
-        )
-        with st.expander("Acquisition costs (CAC)"):
-            st.caption("Enter CAC per customer in the same currency as revenue. Leave unknown sources blank.")
-            cac_sources = sorted(df["source"].dropna().unique().tolist())
-            cac_defaults = pd.DataFrame(
-                {
-                    "source": cac_sources,
-                    "cac": pd.Series(index=range(len(cac_sources)), dtype="float64"),
-                }
-            )
-            cac_inputs = st.data_editor(
-                cac_defaults,
-                hide_index=True,
-                num_rows="fixed",
-                key="cac_by_source_editor",
-                column_config={
-                    "source": st.column_config.TextColumn("Source", disabled=True),
-                    "cac": st.column_config.NumberColumn(
-                        "CAC per customer",
-                        min_value=0.0,
-                        step=1.0,
-                        format="%.2f",
-                    ),
-                },
-            )
 
-if data is not None:
-    cohort_start, cohort_end = cohort_range
-    filtered = df[
-        (df["plan"].isin(plan_filter))
-        & (df["source"].isin(source_filter))
-        & (df["created_at"] >= pd.Timestamp(cohort_start))
-        & (df["created_at"] < pd.Timestamp(cohort_end) + pd.DateOffset(days=1))
-    ].copy()
-    if filtered.empty:
-        st.warning("No rows match the current filters.")
-        st.stop()
-    if not horizon_filter:
-        st.warning("No customers in this selection have reached a supported time horizon.")
-        st.stop()
-    if h is None:
-        st.warning("Choose filters that include customers mature at a supported horizon.")
-        st.stop()
+        filtered = df[(df["plan"].isin(plan_filter)) & (df["source"].isin(source_filter))].copy()
+        if filtered.empty:
+            st.warning("No rows match the current filters.")
+            st.stop()
+        if not horizon_filter:
+            st.warning("Select at least one time horizon.")
+            st.stop()
 
-    mature_counts = filtered.loc[mature_at(filtered, h, asof=asof_ts)].groupby("source").size()
-    qualified_sources = mature_counts[mature_counts >= min_users].index
-    filtered = filtered[filtered["source"].isin(qualified_sources)].copy()
-    if filtered.empty:
-        st.warning(f"No sources have at least {min_users} mature customers at {h} months.")
-        st.stop()
-
-    statistic = "median" if metric_view == "median LTV" else "mean"
-    res, ltv, paid = compute_ltv_summary(
-        filtered,
-        asof=asof_ts,
-        selected_horizons=horizon_filter,
-        statistic=statistic,
-    )
-
-    available_horizons = [
-        horizon
-        for horizon in horizon_filter
-        if ((res["H"] == horizon) & (res["plan"] == "all")).any()
-    ]
-    if not available_horizons:
-        st.warning("No subscribers in this signup cohort have reached the selected time horizons yet.")
-        st.stop()
-
-    st.subheader("Filter summary")
-    st.json({
-        "rows": len(filtered),
-        "plans": sorted(filtered["plan"].unique().tolist()),
-        "sources": sorted(filtered["source"].unique().tolist()),
-        "signup_cohort": [str(cohort_start), str(cohort_end)],
-        "horizons_with_mature_data": available_horizons,
-        "as_of": str(asof_ts.date()),
-    })
-
-    if h not in available_horizons:
-        st.warning("The selected horizon is not supported by the filtered customer data.")
-        st.stop()
-    horizon_unit = "month" if h == 1 else "months"
-
-    ltv_view = res[(res["H"] == h) & (res["plan"] == "all")].set_index("source").sort_values("ltv", ascending=False)
-    intervals = source_ltv_confidence_intervals(
-        filtered,
-        paid,
-        h,
-        asof=asof_ts,
-        statistic=statistic,
-        confidence=confidence_level,
-    ).set_index("source")
-    ltv_view = ltv_view.join(intervals)
-    has_cac = pd.to_numeric(cac_inputs["cac"], errors="coerce").gt(0).any()
-    if has_cac:
-        economics = add_ltv_cac_ratio(ltv_view.reset_index(), cac_inputs).set_index("source")
-        payback = estimate_observed_payback(
+        statistic = "median" if metric_view == "median LTV" else "mean"
+        res, ltv, paid = compute_ltv_summary(
             filtered,
-            paid,
             asof=asof_ts,
-            horizons=available_horizons,
-            cac_by_source=cac_inputs,
-        ).set_index("source")
-        ltv_view = ltv_view.join(
-            economics[["cac", "ltv_cac", "ltv_minus_cac"]]
-        ).join(payback)
-        payback_display = pd.Series("", index=ltv_view.index, dtype="object")
-        costed = ltv_view["cac"].notna()
-        payback_display.loc[costed] = "Not reached"
-        reached = costed & ltv_view["payback_months"].notna()
-        payback_display.loc[reached] = ltv_view.loc[reached, "payback_months"].map(
-            lambda months: f"{int(months)} mo"
+            selected_horizons=horizon_filter,
+            statistic=statistic,
         )
-        ltv_view["payback"] = payback_display
+
+        st.subheader("Filter summary")
+        st.json({
+            "rows": len(filtered),
+            "plans": sorted(filtered["plan"].unique().tolist()),
+            "sources": sorted(filtered["source"].unique().tolist()),
+            "horizons": horizon_filter,
+            "as_of": str(asof_ts.date()),
+        })
+
+        h = st.selectbox("Selected comparison horizon", options=horizon_filter, index=min(len(horizon_filter)-1, 0))
+
+        ltv_view = res[(res["H"] == h) & (res["plan"] == "all")].set_index("source").sort_values("ltv", ascending=False)
+        st.subheader(f"Top sources at {h} months")
+        st.dataframe(ltv_view[["ltv", "n"]], width="stretch")
+
+        bar_data = ltv_view["ltv"].sort_values(ascending=False)
+        st.bar_chart(bar_data)
+
+        st.subheader("Detailed LTV table")
+        detail = res[(res["H"] == h)].pivot(index="source", columns="plan", values="ltv").round(2)
+        st.dataframe(detail, width="stretch")
+
+        st.subheader("Summary metrics")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Average charge / subscriber", round(float(paid.sum(axis=1).mean()), 2))
+        summary_stat_label = "Average" if statistic == "mean" else "Median"
+        col2.metric(
+            f"{h}-month {summary_stat_label.lower()} source LTV",
+            round(float(ltv_view["ltv"].agg(statistic)), 2),
+        )
+        col3.metric("Largest source", ltv_view.index[0] if not ltv_view.empty else "N/A")
+
+        st.markdown(
+            "This dashboard compares expected customer lifetime value by acquisition source under the current monthly/annual subscription assumptions."
+        )
+
+        st.subheader("LTV trajectory by source")
+        horizon_table = res[res["plan"] == "all"].pivot(index="source", columns="H", values="ltv").round(1)
+        st.line_chart(horizon_table)
+
+        st.download_button(
+            label="Download current LTV table",
+            data=res.to_csv(index=False).encode("utf-8"),
+            file_name="ltv_compare.csv",
+            mime="text/csv",
+        )
     else:
-        ltv_view["cac"] = np.nan
-        ltv_view["ltv_cac"] = np.nan
-        ltv_view["ltv_minus_cac"] = np.nan
-        ltv_view["payback"] = ""
+        st.info("Upload a file from the sidebar, or place subscriptions.csv in the project root to use the default dataset.")
 
-    forecast = survival_ltv_forecast(filtered, asof_ts, available_horizons)
-    forecast_view = forecast[forecast["H"] == h].set_index("source")
-    if forecast_view.empty:
-        ltv_view["forecast_ltv"] = np.nan
-        ltv_view["forecast_n"] = np.nan
-    else:
-        ltv_view = ltv_view.join(
-            forecast_view[["forecast_ltv", "n"]].rename(columns={"n": "forecast_n"})
-        )
-
-    cox_error = None
-    try:
-        cox_forecast = cox_survival_forecast(filtered, asof_ts, available_horizons)
-    except (ConvergenceError, ValueError) as error:
-        cox_forecast = pd.DataFrame(columns=["source", "H", "cox_ltv", "n"])
-        cox_error = str(error)
-    cox_view = cox_forecast[cox_forecast["H"] == h].set_index("source")
-    if cox_view.empty:
-        ltv_view["cox_ltv"] = np.nan
-        ltv_view["cox_n"] = np.nan
-    else:
-        ltv_view = ltv_view.join(
-            cox_view[["cox_ltv", "n"]].rename(columns={"n": "cox_n"})
-        )
-
-    st.subheader(f"Model comparison at {h} {horizon_unit}")
-    comparison = ltv_view[
-        [
-            "ltv",
-            "ci_low",
-            "ci_high",
-            "n",
-            "cac",
-            "ltv_cac",
-            "ltv_minus_cac",
-            "payback",
-            "forecast_ltv",
-            "forecast_n",
-            "cox_ltv",
-            "cox_n",
-        ]
-    ].rename(
-        columns={
-            "ltv": "Observed LTV",
-            "ci_low": f"{confidence_level:.0%} CI lower",
-            "ci_high": f"{confidence_level:.0%} CI upper",
-            "n": "Observed N",
-            "cac": "CAC",
-            "ltv_cac": "LTV:CAC",
-            "ltv_minus_cac": "LTV - CAC",
-            "payback": "Observed payback",
-            "forecast_ltv": "Kaplan–Meier LTV",
-            "forecast_n": "KM N",
-            "cox_ltv": "Cox PH LTV",
-            "cox_n": "Cox N",
-        }
-    )
-    st.dataframe(comparison, width="stretch")
-    st.caption("Blank CAC columns mean no positive CAC has been entered. Blank forecast cells mean one or more plan segments lack sufficient follow-up.")
-
-    st.markdown("**Model assumptions and sample coverage**")
-    observed_notes, economics_notes, km_notes, cox_notes = st.columns(4)
-    observed_notes.caption(
-        f"Observed LTV uses fully mature customers at {h} months; interval is bootstrap-based. Observed N is shown per source."
-    )
-    economics_notes.caption(
-        "LTV:CAC uses entered source-level costs. Payback is the first selected mature horizon where mean observed revenue covers CAC."
-    )
-    km_notes.caption(
-        "Kaplan–Meier is the non-parametric retention baseline. Its forecast is not realized LTV."
-    )
-    cox_notes.caption(
-        "Cox PH adjusts for source and plan; assumes proportional hazards. Associations are not causal effects."
-    )
-
-    ltv_chart, net_chart = st.columns(2)
-    with ltv_chart:
-        st.subheader("Observed LTV by source")
-        st.bar_chart(ltv_view["ltv"].sort_values(ascending=False))
-    with net_chart:
-        st.subheader("LTV - CAC by source")
-        net_ltv = ltv_view["ltv_minus_cac"].dropna().sort_values(ascending=False)
-        if net_ltv.empty:
-            st.info("Enter CAC values to compare LTV less acquisition cost.")
-        else:
-            st.bar_chart(net_ltv)
-        st.caption("Revenue less acquisition cost; excludes servicing and other costs.")
-
-    st.subheader("Detailed LTV table")
-    detail = res[(res["H"] == h)].pivot(index="source", columns="plan", values="ltv").round(2)
-    st.dataframe(detail, width="stretch")
-
-    st.subheader("Summary metrics")
-    col1, col2, col3 = st.columns(3)
-    mature_mask = mature_at(filtered, h, asof=asof_ts)
-    mature_ltv = revenue_at(filtered, paid, h)[mature_mask]
-    overall_ltv = mature_ltv.mean() if statistic == "mean" else np.median(mature_ltv)
-    summary_stat_label = "Mean" if statistic == "mean" else "Median"
-    col1.metric("Mature subscribers", f"{len(mature_ltv):,}")
-    col2.metric(
-        f"{h}-month {summary_stat_label.lower()} LTV",
-        round(float(overall_ltv), 2),
-    )
-    col3.metric("Largest source", ltv_view.index[0] if not ltv_view.empty else "N/A")
-
-    st.markdown(
-        "This dashboard compares expected customer lifetime value by acquisition source under the current monthly/annual subscription assumptions."
-    )
-
-    st.subheader("Observed LTV trajectory")
-    horizon_table = res[
-        (res["plan"] == "all") & res["H"].isin(available_horizons)
-    ].pivot(index="source", columns="H", values="ltv").round(1)
-    st.line_chart(horizon_table)
-
-    with st.expander("Cohort retention matrix"):
-        st.caption(
-            "Each row is a signup-month/source/plan cohort. Cells show the share retained at each customer age; "
-            "ages without enough observed customers are left blank."
-        )
-        cohort_data = df[
-            df["source"].isin(source_filter)
-            & df["plan"].isin(plan_filter)
-            & (df["created_at"] >= pd.Timestamp(cohort_start))
-            & (df["created_at"] < pd.Timestamp(cohort_end) + pd.DateOffset(days=1))
-        ].copy()
-        retention = cohort_retention_matrix(
-            cohort_data,
-            asof=asof_ts,
-            max_age=max(HORIZONS),
-            min_customers=min_users,
-        )
-        if retention.empty:
-            st.info("No cohort ages meet the minimum customer threshold.")
-        else:
-            retention_table = retention.pivot(
-                index=["source", "plan", "cohort_month"],
-                columns="age_month",
-                values="retention",
-            )
-            retention_table.columns = [f"Month {age}" for age in retention_table.columns]
-            st.dataframe(
-                retention_table,
-                column_config={
-                    column: st.column_config.NumberColumn(format="percent")
-                    for column in retention_table.columns
-                },
-                width="stretch",
-            )
-
-    st.download_button(
-        label="Download current LTV table",
-        data=res.to_csv(index=False).encode("utf-8"),
-        file_name="ltv_compare.csv",
-        mime="text/csv",
-    )
-
-    st.divider()
-    st.subheader("Survival model forecasts")
-    st.caption(
-        "Both models use right-censored subscription durations and observed billing prices. Forecasts are not realized LTV."
-    )
-    forecast_view = forecast_view.sort_values("forecast_ltv", ascending=False)
-    if forecast_view.empty:
-        st.info("There is not enough observed follow-up for this source and horizon.")
-    else:
-        km_chart, cox_chart = st.columns(2)
-        with km_chart:
-            st.markdown("**Kaplan–Meier baseline**")
-            st.bar_chart(forecast_view["forecast_ltv"])
-        with cox_chart:
-            st.markdown("**Cox proportional hazards**")
-            if cox_error:
-                st.warning(f"Cox model unavailable: {cox_error}")
-            elif cox_view.empty:
-                st.info("There is not enough supported follow-up for this Cox estimate.")
-            else:
-                st.bar_chart(cox_view["cox_ltv"].sort_values(ascending=False))
-
-    with st.expander("Out-of-time model validation"):
-        st.caption(
-            "Trains on earlier signup cohorts and scores a later, fully mature holdout. "
-            "Uses selected sources and plans, but the cohort-date filter is intentionally not applied. "
-            "MAE and RMSE are in revenue units; lower is better. Negative Cox-minus-KM MAE favors Cox."
-        )
-        validation_horizon = st.select_slider(
-            "Validation horizon (months)",
-            options=HORIZONS,
-            value=6 if 6 in HORIZONS else HORIZONS[0],
-        )
-        validation_data = df[
-            df["source"].isin(source_filter) & df["plan"].isin(plan_filter)
-        ].copy()
-        validation_signature = (
-            validation_horizon,
-            str(asof_ts),
-            tuple(sorted(source_filter)),
-            tuple(sorted(plan_filter)),
-            len(validation_data),
-            str(validation_data["created_at"].min()),
-            str(validation_data["created_at"].max()),
-        )
-
-        if st.button("Run validation", key="run_survival_validation"):
-            try:
-                with st.spinner("Fitting models and scoring the time-based holdout..."):
-                    validation_summary, validation_by_source = evaluate_survival_models(
-                        validation_data,
-                        asof_ts,
-                        validation_horizon,
-                    )
-                st.session_state["survival_validation_result"] = {
-                    "signature": validation_signature,
-                    "summary": validation_summary,
-                    "by_source": validation_by_source,
-                    "error": None,
-                }
-            except (ConvergenceError, ValueError) as error:
-                st.session_state["survival_validation_result"] = {
-                    "signature": validation_signature,
-                    "summary": None,
-                    "by_source": None,
-                    "error": str(error),
-                }
-
-        validation_result = st.session_state.get("survival_validation_result")
-        if validation_result and validation_result["signature"] == validation_signature:
-            if validation_result["error"]:
-                st.warning(f"Validation unavailable: {validation_result['error']}")
-            else:
-                validation_summary = validation_result["summary"]
-                st.caption(
-                    f"Training through {validation_summary['train_cutoff']:%Y-%m-%d} "
-                    f"({validation_summary['train_n']:,} customers, "
-                    f"{validation_summary['train_events']:,} cancellations); holdout "
-                    f"{validation_summary['test_start']:%Y-%m-%d} to "
-                    f"{validation_summary['test_end']:%Y-%m-%d}. "
-                    f"Scored {validation_summary['scored_n']:,} of "
-                    f"{validation_summary['holdout_n']:,} mature customers."
-                )
-                st.caption(
-                    "Billing assumptions: uses row-level step/price when present; the built-in defaults are "
-                    "$15 charged monthly and $150 charged annually. Revenue at horizon H includes charges "
-                    "scheduled before H, not at H; taxes, refunds, and servicing costs are excluded unless "
-                    "already reflected in price. Subscription termination is based on ended_at (canceled_at "
-                    "is not used); payment-failure renewals follow a separate eligibility rule."
-                )
-                if validation_summary["cox_events_per_parameter"] < 10:
-                    st.warning(
-                        f"Cox PH has {validation_summary['train_events']:,} training cancellations for "
-                        f"{validation_summary['cox_parameter_count']} fitted coefficients "
-                        f"({validation_summary['cox_events_per_parameter']:.1f} events per coefficient). "
-                        "This is a low-event rule-of-thumb warning; treat Cox scores as exploratory."
-                    )
-                mae_km, mae_cox, rmse_km, rmse_cox = st.columns(4)
-                mae_km.metric("Kaplan–Meier MAE", f"{validation_summary['km_mae']:,.2f}")
-                mae_cox.metric("Cox PH MAE", f"{validation_summary['cox_mae']:,.2f}")
-                rmse_km.metric("Kaplan–Meier RMSE", f"{validation_summary['km_rmse']:,.2f}")
-                rmse_cox.metric("Cox PH RMSE", f"{validation_summary['cox_rmse']:,.2f}")
-                st.metric(
-                    "Cox − Kaplan–Meier MAE",
-                    f"{validation_summary['cox_minus_km_mae']:+,.2f}",
-                    delta=(
-                        "95% month-block CI "
-                        f"[{validation_summary['delta_mae_ci_low']:+,.2f}, "
-                        f"{validation_summary['delta_mae_ci_high']:+,.2f}]"
-                    ),
-                    delta_color="off",
-                )
-                if validation_summary["cox_mae"] < validation_summary["km_mae"]:
-                    result_note = "Cox has lower MAE on this holdout."
-                else:
-                    result_note = "Kaplan–Meier has lower MAE on this holdout."
-                if validation_summary["cox_rmse"] > validation_summary["km_rmse"]:
-                    result_note += " Cox has higher RMSE, so the result is mixed."
-                st.info(result_note)
-                st.dataframe(
-                    validation_result["by_source"].rename(
-                        columns={
-                            "source": "Source",
-                            "customers": "Customers",
-                            "actual_ltv": "Actual LTV",
-                            "km_ltv": "KM prediction",
-                            "cox_ltv": "Cox prediction",
-                            "km_mae": "KM MAE",
-                            "cox_mae": "Cox MAE",
-                        }
-                    ),
-                    hide_index=True,
-                    width="stretch",
-                )
-        else:
-            st.info("Choose a validation horizon and run the holdout comparison.")
-
-        st.divider()
-        rolling_folds = st.select_slider(
-            "Rolling holdout folds",
-            options=[2, 3, 4],
-            value=3,
-        )
-        rolling_signature = (
-            validation_horizon,
-            rolling_folds,
-            str(asof_ts),
-            tuple(sorted(source_filter)),
-            tuple(sorted(plan_filter)),
-            len(validation_data),
-            str(validation_data["created_at"].min()),
-            str(validation_data["created_at"].max()),
-        )
-        if st.button("Run rolling validation", key="run_rolling_validation"):
-            try:
-                with st.spinner("Evaluating consecutive mature signup-cohort windows..."):
-                    rolling_results = evaluate_survival_models_rolling(
-                        validation_data,
-                        asof_ts,
-                        validation_horizon,
-                        n_folds=rolling_folds,
-                    )
-                st.session_state["rolling_validation_result"] = {
-                    "signature": rolling_signature,
-                    "results": rolling_results,
-                    "error": None,
-                }
-            except (ConvergenceError, ValueError) as error:
-                st.session_state["rolling_validation_result"] = {
-                    "signature": rolling_signature,
-                    "results": None,
-                    "error": str(error),
-                }
-
-        rolling_result = st.session_state.get("rolling_validation_result")
-        if rolling_result and rolling_result["signature"] == rolling_signature:
-            if rolling_result["error"]:
-                st.warning(f"Rolling validation unavailable: {rolling_result['error']}")
-            else:
-                fold_results = rolling_result["results"]
-                completed_folds = fold_results[fold_results["status"] == "complete"]
-                if completed_folds.empty:
-                    st.warning("No rolling fold had enough mature observations and training follow-up.")
-                else:
-                    st.caption(
-                        "Each fold trains before its signup window and tests on the next non-overlapping, "
-                        "fully mature window. Fold metrics are comparable within this dataset; means below "
-                        "are unweighted averages across completed folds."
-                    )
-                    fold_mae, fold_rmse = st.columns(2)
-                    fold_mae.metric(
-                        "Average fold MAE (KM / Cox)",
-                        f"{completed_folds['km_mae'].mean():,.2f} / "
-                        f"{completed_folds['cox_mae'].mean():,.2f}",
-                    )
-                    fold_rmse.metric(
-                        "Average fold RMSE (KM / Cox)",
-                        f"{completed_folds['km_rmse'].mean():,.2f} / "
-                        f"{completed_folds['cox_rmse'].mean():,.2f}",
-                    )
-                    display_folds = fold_results.rename(
-                        columns={
-                            "fold": "Fold",
-                            "status": "Status",
-                            "holdout_start": "Signup window start",
-                            "holdout_end": "Signup window end",
-                            "train_cutoff": "Training cutoff",
-                            "train_n": "Training N",
-                            "train_events": "Training cancellations",
-                            "holdout_n": "Mature holdout N",
-                            "scored_n": "Scored N",
-                            "coverage": "Scored coverage",
-                            "km_mae": "KM MAE",
-                            "cox_mae": "Cox MAE",
-                            "km_rmse": "KM RMSE",
-                            "cox_rmse": "Cox RMSE",
-                            "cox_minus_km_mae": "Cox - KM MAE",
-                            "cox_events_per_parameter": "Cox events / coefficient",
-                            "error": "Note",
-                        }
-                    )
-                    st.dataframe(display_folds, hide_index=True, width="stretch")
-                    if (completed_folds["cox_events_per_parameter"] < 10).any():
-                        st.warning(
-                            "At least one fold has fewer than 10 Cox cancellation events per coefficient; "
-                            "interpret its Cox scores as exploratory."
-                        )
-        else:
-            st.info("Run rolling validation to see how model performance changes across signup cohorts.")
-else:
+if data is None:
     st.info("The dashboard is ready. Choose a CSV in the sidebar to compare LTV by acquisition source.")
