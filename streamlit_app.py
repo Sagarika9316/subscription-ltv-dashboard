@@ -100,6 +100,11 @@ with st.sidebar:
         assumptions = df.attrs.get("normalization_assumptions", [])
         if assumptions:
             st.info("Input assumptions: " + " ".join(assumptions))
+        st.caption(
+            f"Billing currency: {df['currency'].iloc[0]}. Price is per scheduled charge; "
+            "billing_interval_months is the number of months between charges, with the first charge at signup. "
+            "The selected H-month revenue window includes charges scheduled before month H, not at H."
+        )
         asof = st.date_input("As-of date", value=pd.Timestamp(ASOF).date())
         asof_ts = pd.Timestamp(asof)
         plan_options = sorted(df["plan"].dropna().unique().tolist())
@@ -675,8 +680,9 @@ if data is not None:
                     f"{validation_summary['holdout_n']:,} mature customers."
                 )
                 st.caption(
-                    "Billing assumptions: uses row-level step/price when present; the built-in defaults are "
-                    "$15 charged monthly and $150 charged annually. Revenue at horizon H includes charges "
+                    f"Billing assumptions: currency is {df['currency'].iloc[0]}; uses row-level price and "
+                    "billing_interval_months when present. Built-in defaults are "
+                    "$15 charged monthly and $150 charged annually in USD. Revenue at horizon H includes charges "
                     "scheduled before H, not at H; taxes, refunds, and servicing costs are excluded unless "
                     "already reflected in price. Subscription termination is based on ended_at (canceled_at "
                     "is not used); payment-failure renewals follow a separate eligibility rule."

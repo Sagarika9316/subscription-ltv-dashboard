@@ -6,6 +6,7 @@ K = 38  # anniversaries 0..37, enough for 36 months of monthly billing
 HORIZONS = [1, 3, 6, 12, 24, 36]
 
 DEFAULT_BILLING = {"monthly": (1, 15.0), "annual": (12, 150.0)}
+DEFAULT_CURRENCY = "USD"
 
 
 def normalize_subscription_dataframe(df):
@@ -59,6 +60,23 @@ def normalize_subscription_dataframe(df):
     if df["source"].isna().any() or df["source"].eq("").any():
         raise ValueError("The 'source' column must not contain blank values.")
 
+    if "billing_interval_months" in df:
+        billing_interval = pd.to_numeric(
+            df["billing_interval_months"], errors="coerce"
+        )
+        if "step" in df:
+            step_values = pd.to_numeric(df["step"], errors="coerce")
+            if (
+                billing_interval.isna().any()
+                or step_values.isna().any()
+                or not np.array_equal(billing_interval.to_numpy(), step_values.to_numpy())
+            ):
+                raise ValueError(
+                    "'step' and 'billing_interval_months' must match when both are provided."
+                )
+        else:
+            df["step"] = billing_interval
+
     for column, default_index, label in (
         ("step", 0, "billing interval"),
         ("price", 1, "subscription price"),
@@ -98,6 +116,24 @@ def normalize_subscription_dataframe(df):
             if (numeric < 0).any():
                 raise ValueError("Subscription prices in 'price' must not be negative.")
             df[column] = numeric.astype(float)
+
+    df["billing_interval_months"] = df["step"]
+    if "currency" not in df:
+        df["currency"] = DEFAULT_CURRENCY
+        assumptions.append(
+            f"Currency defaulted to {DEFAULT_CURRENCY}; no FX conversion is applied."
+        )
+    df["currency"] = df["currency"].astype("string").str.strip().str.upper()
+    if df["currency"].isna().any() or df["currency"].eq("").any():
+        raise ValueError("The 'currency' column must not contain blank values.")
+    invalid_currency = ~df["currency"].str.fullmatch(r"[A-Z]{3}")
+    if invalid_currency.any():
+        raise ValueError("Currency values must be three-letter codes such as USD.")
+    currencies = df["currency"].unique()
+    if len(currencies) != 1:
+        raise ValueError(
+            "Only one currency is supported per upload; convert prices and CAC to a common currency first."
+        )
 
     contribution_column = "net_contribution_per_charge"
     if contribution_column in df:

@@ -71,8 +71,9 @@ def test_normalization_preserves_row_level_billing_values():
         {
             "source": ["email", "paid"],
             "plan": ["monthly", "annual"],
-            "step": [1, 12],
+            "billing_interval_months": [1, 12],
             "price": [19.5, 180],
+            "currency": ["USD", "USD"],
             "net_contribution_per_charge": [8.5, 92],
             "created_at": ["2025-01-01", "2025-01-01"],
             "ended_at": [None, None],
@@ -84,6 +85,8 @@ def test_normalization_preserves_row_level_billing_values():
 
     assert normalized["price"].tolist() == [19.5, 180.0]
     assert normalized["step"].tolist() == [1, 12]
+    assert normalized["billing_interval_months"].tolist() == [1, 12]
+    assert normalized["currency"].tolist() == ["USD", "USD"]
     assert normalized["net_contribution_per_charge"].tolist() == [8.5, 92.0]
     assert normalized.attrs["normalization_assumptions"] == []
 
@@ -104,8 +107,27 @@ def test_normalization_reports_plan_defaults_and_derives_source():
 
     assert normalized["source"].tolist() == ["email", "paid_social/spring"]
     assert normalized["step"].tolist() == [1, 12]
+    assert normalized["billing_interval_months"].tolist() == [1, 12]
     assert normalized["price"].tolist() == [15.0, 150.0]
-    assert len(normalized.attrs["normalization_assumptions"]) == 3
+    assert normalized["currency"].tolist() == ["USD", "USD"]
+    assert len(normalized.attrs["normalization_assumptions"]) == 4
+
+
+def test_normalization_rejects_mixed_currencies():
+    df = pd.DataFrame(
+        {
+            "source": ["email", "paid"],
+            "plan": ["monthly", "monthly"],
+            "price": [15, 15],
+            "currency": ["USD", "GBP"],
+            "created_at": ["2025-01-01", "2025-01-01"],
+            "ended_at": [None, None],
+            "end_reason": [None, None],
+        }
+    )
+
+    with pytest.raises(ValueError, match="Only one currency is supported per upload"):
+        normalize_subscription_dataframe(df)
 
 
 def test_normalization_rejects_invalid_row_level_price():

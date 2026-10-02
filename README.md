@@ -22,6 +22,16 @@ Running the script produces:
 
 The script calculates renewal eligibility and cohort-level LTV for several time horizons.
 
+## Subscription billing fields
+
+For data-specific billing, include these columns in the CSV:
+
+- `price`: numeric amount for one scheduled subscription charge.
+- `billing_interval_months`: positive whole number of months between charges (for example, `1` monthly or `12` annual).
+- `currency`: one three-letter currency code for the entire upload (for example, `USD`). The app does not convert currencies.
+
+The first charge is assumed to occur at signup, with subsequent charges at each billing interval. If these fields are absent, the app uses a hypothetical USD schedule: monthly at $15 every 1 month and annual at $150 every 12 months. At horizon H, revenue includes scheduled charges strictly before month H, not a charge exactly at H. Make sure these assumptions match the actual billing contract before using the results for business decisions.
+
 ## Optional contribution-margin input
 
 The Streamlit dashboard can also show contribution LTV when the CSV includes
