@@ -21,6 +21,7 @@ from survival_models import (
     cox_survival_forecast,
     evaluate_survival_models,
     evaluate_survival_models_rolling,
+    kaplan_meier_retention_curve,
 )
 from streamlit_app import compute_ltv_summary
 from utils import (
@@ -343,7 +344,11 @@ def test_cox_survival_forecast_returns_horizon_ltv_by_source():
     for index in range(80):
         source = "email" if index % 2 == 0 else "paid"
         plan = "monthly" if index % 4 < 2 else "annual"
-        ended = created + pd.DateOffset(months=5 + index % 18) if index % 3 == 0 else pd.NaT
+        ended = created if index == 0 else (
+            created + pd.DateOffset(months=5 + index % 18)
+            if index % 3 == 0
+            else pd.NaT
+        )
         rows.append(
             {
                 "source": source,
@@ -600,3 +605,33 @@ def test_standalone_cohort_churn_summary_has_stable_reason_columns():
     assert month_two["payment_failure_churned"] == 1
     assert month_two["other_churned"] == 1
     assert month_two["retention"] == 0.25
+
+
+def test_kaplan_meier_retention_curve_censors_active_users_and_limits_followup():
+    created = pd.Timestamp("2024-01-01")
+    df = pd.DataFrame(
+        {
+            "source": ["email"] * 4,
+            "plan": ["monthly"] * 4,
+            "created_at": [created] * 4,
+            "ended_at": [
+                pd.Timestamp("2024-01-20"),
+                pd.Timestamp("2024-02-10"),
+                pd.NaT,
+                pd.NaT,
+            ],
+        }
+    )
+
+    curve = kaplan_meier_retention_curve(
+        df,
+        pd.Timestamp("2024-03-10"),
+        max_age=6,
+        min_at_risk=2,
+    )
+
+    assert curve["age_month"].tolist() == [0, 1, 2]
+    assert curve.loc[curve["age_month"] == 0, "retention"].iloc[0] == 1
+    assert curve["retention"].between(0, 1).all()
+    assert curve["ci_low"].le(curve["retention"]).all()
+    assert curve["ci_high"].ge(curve["retention"]).all()

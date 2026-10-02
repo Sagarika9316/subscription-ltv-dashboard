@@ -19,7 +19,6 @@ from ltv_models import (
     source_ltv_confidence_intervals,
     survival_ltv_forecast,
 )
-from survival_models import aft_survival_forecast
 from utils import (
     ASOF,
     HORIZONS,
@@ -31,9 +30,11 @@ from utils import (
     revenue_at,
 )
 from survival_models import (
+    aft_survival_forecast,
     cox_survival_forecast,
     evaluate_survival_models,
     evaluate_survival_models_rolling,
+    kaplan_meier_retention_curve,
 )
 
 
@@ -742,6 +743,77 @@ if data is not None:
         (res["plan"] == "all") & res["H"].isin(available_horizons)
     ].pivot(index="source", columns="H", values="ltv").round(1)
     st.line_chart(horizon_table)
+
+    with st.expander("Retention and churn curves by source and plan"):
+        st.caption(
+            "Kaplan–Meier estimates the share still subscribed over customer age. Active subscriptions are right-censored "
+            "at the as-of date, not counted as churn. Curves stop when fewer than the minimum selected customers remain at risk."
+        )
+        curve_metric = st.radio(
+            "Curve metric",
+            ["Retention", "Cumulative churn"],
+            horizontal=True,
+            key="retention_curve_metric",
+        )
+        curve_data = kaplan_meier_retention_curve(
+            filtered,
+            asof=asof_ts,
+            max_age=max(HORIZONS),
+            min_at_risk=min_users,
+            confidence=confidence_level,
+        )
+        if curve_data.empty:
+            st.info("No source/plan groups have enough customers at risk to draw a curve.")
+        else:
+            curve_plans = sorted(curve_data["plan"].unique().tolist())
+            curve_tabs = st.tabs([plan.title() for plan in curve_plans])
+            for plan, tab in zip(curve_plans, curve_tabs):
+                with tab:
+                    plan_curve = curve_data[curve_data["plan"] == plan].copy()
+                    if curve_metric == "Cumulative churn":
+                        plan_curve["curve_value"] = 1 - plan_curve["retention"]
+                        plan_curve["curve_low"] = 1 - plan_curve["ci_high"]
+                        plan_curve["curve_high"] = 1 - plan_curve["ci_low"]
+                        value_label = "Cumulative churn"
+                    else:
+                        plan_curve["curve_value"] = plan_curve["retention"]
+                        plan_curve["curve_low"] = plan_curve["ci_low"]
+                        plan_curve["curve_high"] = plan_curve["ci_high"]
+                        value_label = "Retention"
+
+                    chart = plan_curve.pivot(
+                        index="age_month", columns="source", values="curve_value"
+                    )
+                    st.line_chart(chart, y_label=value_label, x_label="Months since signup")
+                    curve_table = plan_curve.rename(
+                        columns={
+                            "source": "Source",
+                            "age_month": "Months since signup",
+                            "at_risk": "Customers at risk",
+                            "curve_value": value_label,
+                            "curve_low": f"{confidence_level:.0%} CI lower",
+                            "curve_high": f"{confidence_level:.0%} CI upper",
+                        }
+                    )[
+                        [
+                            "Source",
+                            "Months since signup",
+                            "Customers at risk",
+                            value_label,
+                            f"{confidence_level:.0%} CI lower",
+                            f"{confidence_level:.0%} CI upper",
+                        ]
+                    ]
+                    st.dataframe(
+                        curve_table,
+                        hide_index=True,
+                        column_config={
+                            value_label: st.column_config.NumberColumn(format="percent"),
+                            f"{confidence_level:.0%} CI lower": st.column_config.NumberColumn(format="percent"),
+                            f"{confidence_level:.0%} CI upper": st.column_config.NumberColumn(format="percent"),
+                        },
+                        width="stretch",
+                    )
 
     with st.expander("Cohort retention matrix"):
         st.caption(

@@ -7,6 +7,73 @@ from lifelines.statistics import proportional_hazard_test
 from utils import build_eligibility, mature_at, revenue_at
 
 
+def kaplan_meier_retention_curve(
+    df,
+    asof,
+    max_age=36,
+    min_at_risk=1,
+    confidence=0.95,
+):
+    required = {"source", "plan", "created_at", "ended_at"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {', '.join(sorted(missing))}")
+    if max_age < 0:
+        raise ValueError("max_age must be non-negative.")
+    if min_at_risk < 1:
+        raise ValueError("min_at_risk must be positive.")
+    if not 0 < confidence < 1:
+        raise ValueError("confidence must be between 0 and 1.")
+
+    asof = pd.Timestamp(asof)
+    observed = df[
+        df["created_at"].notna() & (df["created_at"] <= asof)
+    ].copy()
+    columns = ["source", "plan", "age_month", "at_risk", "retention", "ci_low", "ci_high"]
+    if observed.empty:
+        return pd.DataFrame(columns=columns)
+
+    event = observed["ended_at"].notna() & (observed["ended_at"] <= asof)
+    observed_end = observed["ended_at"].where(event, asof)
+    observed["duration"] = (
+        (observed_end - observed["created_at"]).dt.days / 30.44
+    ).clip(lower=0)
+    observed["event"] = event.astype(int)
+    ages = np.arange(max_age + 1)
+
+    rows = []
+    for (source, plan), group in observed.groupby(["source", "plan"], sort=True):
+        at_risk_counts = (
+            group["duration"].to_numpy()[:, None] >= ages[None, :]
+        ).sum(axis=0)
+        if at_risk_counts.max(initial=0) < min_at_risk:
+            continue
+
+        fitter = KaplanMeierFitter(alpha=1 - confidence).fit(
+            group["duration"],
+            event_observed=group["event"],
+            timeline=ages,
+            ci_labels=["ci_low", "ci_high"],
+        )
+        confidence_intervals = fitter.confidence_interval_survival_function_
+        for age, at_risk in zip(ages, at_risk_counts):
+            if at_risk < min_at_risk:
+                continue
+            rows.append(
+                {
+                    "source": source,
+                    "plan": plan,
+                    "age_month": int(age),
+                    "at_risk": int(at_risk),
+                    "retention": float(fitter.predict(age)),
+                    "ci_low": float(confidence_intervals.loc[age, "ci_low"]),
+                    "ci_high": float(confidence_intervals.loc[age, "ci_high"]),
+                }
+            )
+
+    return pd.DataFrame(rows, columns=columns)
+
+
 def cox_survival_forecast(df, asof, horizons, penalizer=0.1):
     columns = ["source", "H", "cox_ltv", "n"]
     asof = pd.Timestamp(asof)
@@ -93,7 +160,7 @@ def aft_survival_forecast(df, asof, horizons, penalizer=0.1):
     observed_end = observed["ended_at"].where(event, asof)
     observed["duration"] = (
         (observed_end - observed["created_at"]).dt.days / 30.44
-    ).clip(lower=0)
+    ).clip(lower=1 / 30.44)
     observed["event"] = event.astype(int)
 
     if observed["event"].sum() < 2:
