@@ -254,7 +254,9 @@ def test_time_based_model_evaluation_scores_mature_holdout():
         plan = "monthly" if index % 4 < 2 else "annual"
         created = holdout_dates[(index // 2) % 2] if is_holdout else train_start
         has_ended = index % 3 == 0
-        ended = created + pd.DateOffset(months=2) if has_ended else pd.NaT
+        ended = created if index == 0 else (
+            created + pd.DateOffset(months=2) if has_ended else pd.NaT
+        )
         rows.append(
             {
                 "source": source,
@@ -282,8 +284,10 @@ def test_time_based_model_evaluation_scores_mature_holdout():
     )
     assert summary["km_mae"] >= 0
     assert summary["cox_mae"] >= 0
+    assert summary["aft_mae"] >= 0
     assert summary["km_rmse"] >= 0
     assert summary["cox_rmse"] >= 0
+    assert summary["aft_rmse"] >= 0
     assert len(by_source) == 2
 
 
@@ -363,6 +367,8 @@ def test_rolling_survival_evaluation_returns_non_overlapping_folds():
     assert folds["status"].eq("complete").all()
     assert folds["holdout_start"].is_monotonic_increasing
     assert folds["scored_n"].eq(48).all()
+    assert folds["aft_mae"].notna().all()
+    assert folds["aft_rmse"].notna().all()
 
 
 def test_cohort_retention_matrix_omits_immature_ages():

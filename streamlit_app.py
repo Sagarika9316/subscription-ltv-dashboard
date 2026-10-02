@@ -502,7 +502,9 @@ if data is not None:
         st.caption(
             "Trains on earlier signup cohorts and scores a later, fully mature holdout. "
             "Uses selected sources and plans, but the cohort-date filter is intentionally not applied. "
-            "MAE and RMSE are in revenue units; lower is better. Negative Cox-minus-KM MAE favors Cox."
+            "Compares Kaplan–Meier, Cox PH, and Weibull AFT on the same customers. "
+            "Cox assumes proportional hazards; Weibull AFT assumes Weibull event times. "
+            "MAE and RMSE are in gross-revenue units; lower is better."
         )
         validation_horizon = st.select_slider(
             "Validation horizon (months)",
@@ -573,28 +575,57 @@ if data is not None:
                         f"({validation_summary['cox_events_per_parameter']:.1f} events per coefficient). "
                         "This is a low-event rule-of-thumb warning; treat Cox scores as exploratory."
                     )
-                mae_km, mae_cox, rmse_km, rmse_cox = st.columns(4)
-                mae_km.metric("Kaplan–Meier MAE", f"{validation_summary['km_mae']:,.2f}")
-                mae_cox.metric("Cox PH MAE", f"{validation_summary['cox_mae']:,.2f}")
-                rmse_km.metric("Kaplan–Meier RMSE", f"{validation_summary['km_rmse']:,.2f}")
-                rmse_cox.metric("Cox PH RMSE", f"{validation_summary['cox_rmse']:,.2f}")
-                st.metric(
-                    "Cox − Kaplan–Meier MAE",
+                km_metrics, cox_metrics, aft_metrics = st.columns(3)
+                with km_metrics:
+                    st.markdown("**Kaplan–Meier baseline**")
+                    st.metric("MAE", f"{validation_summary['km_mae']:,.2f}")
+                    st.metric("RMSE", f"{validation_summary['km_rmse']:,.2f}")
+                with cox_metrics:
+                    st.markdown("**Cox proportional hazards**")
+                    st.metric("MAE", f"{validation_summary['cox_mae']:,.2f}")
+                    st.metric("RMSE", f"{validation_summary['cox_rmse']:,.2f}")
+                with aft_metrics:
+                    st.markdown("**Weibull AFT**")
+                    st.metric("MAE", f"{validation_summary['aft_mae']:,.2f}")
+                    st.metric("RMSE", f"{validation_summary['aft_rmse']:,.2f}")
+
+                cox_delta, aft_delta = st.columns(2)
+                cox_delta.metric(
+                    "Cox − KM MAE",
                     f"{validation_summary['cox_minus_km_mae']:+,.2f}",
                     delta=(
                         "95% month-block CI "
-                        f"[{validation_summary['delta_mae_ci_low']:+,.2f}, "
-                        f"{validation_summary['delta_mae_ci_high']:+,.2f}]"
+                        f"[{validation_summary['cox_delta_mae_ci_low']:+,.2f}, "
+                        f"{validation_summary['cox_delta_mae_ci_high']:+,.2f}]"
                     ),
                     delta_color="off",
                 )
-                if validation_summary["cox_mae"] < validation_summary["km_mae"]:
-                    result_note = "Cox has lower MAE on this holdout."
-                else:
-                    result_note = "Kaplan–Meier has lower MAE on this holdout."
-                if validation_summary["cox_rmse"] > validation_summary["km_rmse"]:
-                    result_note += " Cox has higher RMSE, so the result is mixed."
-                st.info(result_note)
+                aft_delta.metric(
+                    "AFT − KM MAE",
+                    f"{validation_summary['aft_minus_km_mae']:+,.2f}",
+                    delta=(
+                        "95% month-block CI "
+                        f"[{validation_summary['aft_delta_mae_ci_low']:+,.2f}, "
+                        f"{validation_summary['aft_delta_mae_ci_high']:+,.2f}]"
+                    ),
+                    delta_color="off",
+                )
+                mae_scores = {
+                    "Kaplan–Meier": validation_summary["km_mae"],
+                    "Cox PH": validation_summary["cox_mae"],
+                    "Weibull AFT": validation_summary["aft_mae"],
+                }
+                rmse_scores = {
+                    "Kaplan–Meier": validation_summary["km_rmse"],
+                    "Cox PH": validation_summary["cox_rmse"],
+                    "Weibull AFT": validation_summary["aft_rmse"],
+                }
+                mae_winner = min(mae_scores, key=mae_scores.get)
+                rmse_winner = min(rmse_scores, key=rmse_scores.get)
+                st.info(
+                    f"Lowest MAE: {mae_winner}; lowest RMSE: {rmse_winner}. "
+                    "A difference in winners indicates a trade-off, not one overall winner."
+                )
                 ph_tests = validation_summary["ph_tests"]
                 ph_violations = ph_tests[ph_tests["potential_violation"]]
                 if ph_violations.empty:
@@ -639,8 +670,10 @@ if data is not None:
                             "actual_ltv": "Actual LTV",
                             "km_ltv": "KM prediction",
                             "cox_ltv": "Cox prediction",
+                            "aft_ltv": "AFT prediction",
                             "km_mae": "KM MAE",
                             "cox_mae": "Cox MAE",
+                            "aft_mae": "AFT MAE",
                         }
                     ),
                     hide_index=True,
@@ -701,16 +734,24 @@ if data is not None:
                         "fully mature window. Fold metrics are comparable within this dataset; means below "
                         "are unweighted averages across completed folds."
                     )
-                    fold_mae, fold_rmse = st.columns(2)
-                    fold_mae.metric(
-                        "Average fold MAE (KM / Cox)",
+                    fold_km, fold_cox, fold_aft = st.columns(3)
+                    fold_km.metric(
+                        "Average fold MAE / RMSE",
                         f"{completed_folds['km_mae'].mean():,.2f} / "
-                        f"{completed_folds['cox_mae'].mean():,.2f}",
+                        f"{completed_folds['km_rmse'].mean():,.2f}",
+                        help="Kaplan–Meier baseline",
                     )
-                    fold_rmse.metric(
-                        "Average fold RMSE (KM / Cox)",
-                        f"{completed_folds['km_rmse'].mean():,.2f} / "
+                    fold_cox.metric(
+                        "Average fold MAE / RMSE",
+                        f"{completed_folds['cox_mae'].mean():,.2f} / "
                         f"{completed_folds['cox_rmse'].mean():,.2f}",
+                        help="Cox proportional hazards",
+                    )
+                    fold_aft.metric(
+                        "Average fold MAE / RMSE",
+                        f"{completed_folds['aft_mae'].mean():,.2f} / "
+                        f"{completed_folds['aft_rmse'].mean():,.2f}",
+                        help="Weibull accelerated failure time",
                     )
                     display_folds = fold_results.rename(
                         columns={
@@ -726,9 +767,16 @@ if data is not None:
                             "coverage": "Scored coverage",
                             "km_mae": "KM MAE",
                             "cox_mae": "Cox MAE",
+                            "aft_mae": "AFT MAE",
                             "km_rmse": "KM RMSE",
                             "cox_rmse": "Cox RMSE",
+                            "aft_rmse": "AFT RMSE",
                             "cox_minus_km_mae": "Cox - KM MAE",
+                            "aft_minus_km_mae": "AFT - KM MAE",
+                            "cox_delta_mae_ci_low": "Cox delta CI low",
+                            "cox_delta_mae_ci_high": "Cox delta CI high",
+                            "aft_delta_mae_ci_low": "AFT delta CI low",
+                            "aft_delta_mae_ci_high": "AFT delta CI high",
                             "cox_events_per_parameter": "Cox events / coefficient",
                             "error": "Note",
                         }
