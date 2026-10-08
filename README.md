@@ -37,6 +37,16 @@ better customer value. Detailed unit economics, retention, survival forecasts,
 and time-based model validation are shown separately. Forecast validation at a
 short horizon does not establish accuracy of the 60-month extrapolation.
 
+The dashboard includes a plain-language glossary for the core analytics terms,
+including observed and forecast horizons, censoring, survival models, validation,
+and unit economics. KNN is described for context but is not currently used; the
+app does not make individual churn-risk predictions.
+
+The main view prioritizes a single takeaway, the number of subscriptions behind
+it, and a narrow source comparison table. Cost and forecast columns, model
+diagnostics, and definitions are available in optional detail sections so users
+can start with plain-language results and open technical context when needed.
+
 Available dials include acquisition source, plan, signup date range, as-of date,
 observed revenue horizon, forecast window (36/48/60 months), mean or median
 revenue, confidence level, minimum mature sample size, and optional CAC inputs.
