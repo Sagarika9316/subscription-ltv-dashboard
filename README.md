@@ -46,6 +46,9 @@ The main view prioritizes a single takeaway, the number of subscriptions behind
 it, and a narrow source comparison table. Cost and forecast columns, model
 diagnostics, and definitions are available in optional detail sections so users
 can start with plain-language results and open technical context when needed.
+In the loaded dashboard, a row of section links connects the overview, source
+comparison, acquisition-cost and experiment tools, retention trends, forecasts,
+and forecast checks in one continuous app.
 
 Available dials include acquisition source, plan, signup date range, as-of date,
 observed revenue horizon, forecast window (36/48/60 months), mean or median

@@ -103,6 +103,27 @@ st.markdown(
     [data-testid="stSidebar"] {
         border-right: 1px solid rgba(34, 37, 43, 0.10);
     }
+    .dashboard-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.55rem;
+        margin: 0.6rem 0 1.4rem;
+    }
+    .dashboard-nav a {
+        display: inline-block;
+        padding: 0.45rem 0.8rem;
+        border: 1px solid rgba(34, 37, 43, 0.14);
+        border-radius: 999px;
+        background: #ffffff;
+        color: #22252b !important;
+        font-size: 0.9rem;
+        font-weight: 600;
+        text-decoration: none !important;
+    }
+    .dashboard-nav a:hover {
+        border-color: #e64c3c;
+        color: #b83227 !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -458,6 +479,19 @@ if data is not None:
         f"Signup dates: {cohort_start} to {cohort_end}. Available revenue periods: "
         f"{', '.join(map(str, horizon_filter))} months."
     )
+    st.markdown(
+        """
+        <nav class="dashboard-nav" aria-label="Dashboard sections">
+          <a href="#dashboard-overview">Overview</a>
+          <a href="#source-comparison">Compare sources</a>
+          <a href="#marketing-test">Acquisition costs &amp; test</a>
+          <a href="#retention-insights">Retention over time</a>
+          <a href="#future-estimates">Future estimates</a>
+          <a href="#estimate-check">Check estimate accuracy</a>
+        </nav>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if h not in available_horizons:
         st.warning("The selected horizon is not supported by the filtered customer data.")
@@ -566,7 +600,8 @@ if data is not None:
             aft_view[["aft_ltv", "n"]].rename(columns={"n": "aft_n"})
         )
 
-    st.header("What the data says")
+    st.markdown('<div id="dashboard-overview"></div>', unsafe_allow_html=True)
+    st.header("Overview: what the data says")
     st.caption(
         f"Estimated gross revenue per subscription through {h} "
         f"{horizon_unit}; values are in {df['currency'].iloc[0]}."
@@ -608,6 +643,7 @@ if data is not None:
         "horizon. It excludes costs and future charges."
     )
 
+    st.markdown('<div id="source-comparison"></div>', unsafe_allow_html=True)
     st.subheader(f"Compare sources at {h} {horizon_unit}")
     st.caption(
         "Observed revenue uses mature customers. Forecast columns estimate future "
@@ -718,7 +754,8 @@ if data is not None:
         "subscription group lacks enough history."
     )
 
-    st.subheader("Which source might be worth testing?")
+    st.markdown('<div id="marketing-test"></div>', unsafe_allow_html=True)
+    st.subheader("Acquisition costs: which source might be worth testing?")
     minimum_gross_ltv_cac = st.number_input(
         "Minimum cautious revenue-to-cost ratio",
         min_value=0.1,
@@ -1027,7 +1064,9 @@ if data is not None:
                 "Gross revenue should not be treated as profit."
             )
 
-    st.subheader("Observed revenue by source and plan")
+    st.markdown('<div id="retention-insights"></div>', unsafe_allow_html=True)
+    st.subheader("Revenue and retention over time")
+    st.markdown("**Observed revenue by source and plan**")
     detail = res[(res["H"] == h)].pivot(index="source", columns="plan", values="ltv").round(2)
     st.dataframe(detail, width="stretch")
     st.caption(
@@ -1035,7 +1074,7 @@ if data is not None:
         f"through month {h}, in {df['currency'].iloc[0]}."
     )
 
-    st.subheader("All-source snapshot")
+    st.markdown("**All-source snapshot**")
     col1, col2 = st.columns(2)
     mature_mask = mature_at(filtered, h, asof=asof_ts)
     mature_ltv = revenue_at(filtered, paid, h)[mature_mask]
@@ -1050,7 +1089,7 @@ if data is not None:
         f"Highest observed source: {ltv_view.index[0] if not ltv_view.empty else 'N/A'}"
     )
 
-    st.subheader("How observed revenue changes with time")
+    st.markdown("**How revenue changes with time**")
     horizon_table = res[
         (res["plan"] == "all") & res["H"].isin(available_horizons)
     ].pivot(index="H", columns="source", values="ltv").sort_index().round(1)
@@ -1221,7 +1260,8 @@ if data is not None:
     )
 
     st.divider()
-    st.subheader("Compare ways to estimate future revenue")
+    st.markdown('<div id="future-estimates"></div>', unsafe_allow_html=True)
+    st.subheader("Future revenue estimates")
     st.caption(
         "These are estimates, not revenue already received. They use different "
         "approaches to past subscription endings; see the optional definitions above."
@@ -1328,6 +1368,7 @@ if data is not None:
             "still excludes servicing, payment, refund, tax, and other variable costs."
         )
 
+    st.markdown('<div id="estimate-check"></div>', unsafe_allow_html=True)
     with st.expander("How accurate are the estimates? (optional check)"):
         st.caption(
             "Fits each approach using earlier signups and checks estimates against a "
