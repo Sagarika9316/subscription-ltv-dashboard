@@ -99,6 +99,17 @@ with st.expander("A quick guide: what these numbers mean"):
     )
 
 with st.sidebar:
+    st.header("Dashboard goals")
+    st.markdown(
+        "- Compare **observed gross revenue** across acquisition sources and plans.\n"
+        "- Separate realized results from **retention-based forecasts** and show "
+        "how much follow-up supports them.\n"
+        "- Surface uncertainty and data limitations before interpreting a source "
+        "as a marketing opportunity.\n"
+        "- Help identify hypotheses for a **controlled test**—not automatically "
+        "recommend increasing spend."
+    )
+    st.divider()
     st.header("Controls")
     st.markdown(
         "Start by uploading the subscription CSV. Then choose a plan, source, signup "
