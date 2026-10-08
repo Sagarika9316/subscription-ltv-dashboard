@@ -4,7 +4,7 @@ import pandas as pd
 ASOF = pd.Timestamp("2026-06-30")
 K = 38  # anniversaries 0..37, enough for 36 months of monthly billing
 HORIZONS = [1, 3, 6, 12, 24, 36]
-
+LONG_TERM_FORECAST_HORIZON = 60
 DEFAULT_BILLING = {"monthly": (1, 15.0), "annual": (12, 150.0)}
 DEFAULT_CURRENCY = "USD"
 STATIC_CAC_BY_SOURCE = {

@@ -22,6 +22,14 @@ Running the script produces:
 
 The script calculates renewal eligibility and cohort-level LTV for several time horizons.
 
+The Streamlit dashboard also shows a separate 60-month expected gross-revenue
+forecast using a Weibull AFT model with source and plan as predictors. Its approximate
+confidence interval reflects fitted parameter uncertainty, not uncertainty in
+prices, model choice, or future business conditions. The dashboard reports
+observed follow-up and flags estimates that extrapolate beyond it. This is a
+source-level group estimate, not an individual customer's unlimited lifetime
+value or a profit estimate.
+
 ## Subscription billing fields
 
 For data-specific billing, include these columns in the CSV:

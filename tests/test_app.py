@@ -17,6 +17,7 @@ from ltv_models import (
     survival_ltv_forecast,
 )
 from survival_models import (
+    aft_long_term_revenue_forecast,
     aft_survival_forecast,
     cox_survival_forecast,
     evaluate_survival_models,
@@ -396,6 +397,42 @@ def test_aft_survival_forecast_returns_horizon_ltv_by_source():
     assert set(at_12_months["source"]) == {"email", "paid"}
     assert (at_12_months["aft_ltv"] > 0).all()
     assert (at_12_months["n"] == 40).all()
+
+
+def test_long_term_aft_forecast_extrapolates_and_returns_parameter_interval():
+    rows = []
+    created = pd.Timestamp("2020-01-01")
+    for index in range(120):
+        source = "email" if index % 2 == 0 else "paid"
+        plan = "monthly" if index % 4 < 2 else "annual"
+        ended = (
+            created + pd.DateOffset(months=6 + index % 30)
+            if index % 3 == 0
+            else pd.NaT
+        )
+        rows.append(
+            {
+                "source": source,
+                "plan": plan,
+                "step": 1 if plan == "monthly" else 12,
+                "price": 15 if plan == "monthly" else 150,
+                "created_at": created,
+                "ended_at": ended,
+            }
+        )
+
+    result = aft_long_term_revenue_forecast(
+        pd.DataFrame(rows),
+        asof=pd.Timestamp("2024-12-31"),
+        horizon=60,
+    )
+
+    assert set(result["source"]) == {"email", "paid"}
+    assert (result["forecast_ltv"] > 0).all()
+    assert (result["ci_low"] <= result["forecast_ltv"]).all()
+    assert (result["ci_high"] >= result["forecast_ltv"]).all()
+    assert (result["n"] == 60).all()
+    assert (result["extrapolation_months"] > 0).all()
 
 
 def test_time_based_model_evaluation_scores_mature_holdout():

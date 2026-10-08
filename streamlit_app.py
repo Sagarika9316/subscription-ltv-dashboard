@@ -22,6 +22,7 @@ from ltv_models import (
 from utils import (
     ASOF,
     HORIZONS,
+    LONG_TERM_FORECAST_HORIZON,
     STATIC_CAC_BY_SOURCE,
     build_eligibility,
     mature_at,
@@ -34,6 +35,7 @@ from survival_models import (
     cox_survival_forecast,
     evaluate_survival_models,
     evaluate_survival_models_rolling,
+    aft_long_term_revenue_forecast,
     kaplan_meier_retention_curve,
 )
 
@@ -932,6 +934,60 @@ if data is not None:
                 st.info("There is not enough supported follow-up for this AFT estimate.")
             else:
                 st.bar_chart(aft_view["aft_ltv"].sort_values(ascending=False))
+
+    st.subheader(
+        f"Long-term gross revenue forecast ({LONG_TERM_FORECAST_HORIZON} months)"
+    )
+    st.caption(
+        "This is a source-level expected revenue estimate from one Weibull AFT model "
+        "using source and plan as predictors, applied to each plan's billing schedule. "
+        "It is not an individual customer's prediction or an unlimited lifetime value. "
+        "The interval reflects model parameter "
+        "uncertainty; it does not include price, model-choice, or future-business uncertainty."
+    )
+    try:
+        long_term_forecast = aft_long_term_revenue_forecast(
+            filtered,
+            asof=asof_ts,
+            horizon=LONG_TERM_FORECAST_HORIZON,
+            confidence=confidence_level,
+        )
+    except (ConvergenceError, ValueError) as error:
+        st.warning(f"Long-term Weibull forecast unavailable: {error}")
+    else:
+        if long_term_forecast.empty:
+            st.info(
+                "There are not enough observed cancellations to estimate the "
+                "long-term Weibull forecast."
+            )
+        else:
+            display_forecast = long_term_forecast.rename(
+                columns={
+                    "source": "Source",
+                    "forecast_ltv": "60-month expected gross revenue",
+                    "ci_low": f"{confidence_level:.0%} model interval lower",
+                    "ci_high": f"{confidence_level:.0%} model interval upper",
+                    "n": "Customers",
+                    "max_observed_followup_months": "Shortest source/plan follow-up (months)",
+                    "extrapolation_months": "Months extrapolated",
+                }
+            ).set_index("Source")
+            st.dataframe(display_forecast.round(2), width="stretch")
+            extrapolated = long_term_forecast[
+                long_term_forecast["extrapolation_months"] > 0
+            ]
+            if not extrapolated.empty:
+                st.warning(
+                    "These 60-month estimates extrapolate beyond observed "
+                    "subscription follow-up. The farther beyond observed history, "
+                    "the more the result depends on the Weibull assumption."
+                )
+            st.caption(
+                f"Prices use the selected billing assumptions ({df['currency'].iloc[0]}). "
+                "The model interval is an approximate confidence interval for fitted "
+                "Weibull parameters, not a range guaranteed to contain an individual "
+                "customer's future revenue. Revenue excludes costs and discounts."
+            )
 
     with st.expander("Out-of-time model validation"):
         st.caption(

@@ -220,6 +220,156 @@ def aft_survival_forecast(df, asof, horizons, penalizer=0.1):
     return pd.DataFrame(rows, columns=columns).sort_values(["source", "H"])
 
 
+def aft_long_term_revenue_forecast(
+    df,
+    asof,
+    horizon,
+    confidence=0.95,
+    penalizer=0.1,
+    n_parameter_draws=1000,
+    random_state=42,
+):
+    """Estimate source-level gross revenue through a finite Weibull AFT horizon."""
+    if horizon <= 0:
+        raise ValueError("horizon must be positive.")
+    if not 0 < confidence < 1:
+        raise ValueError("confidence must be between 0 and 1.")
+    if n_parameter_draws < 2:
+        raise ValueError("n_parameter_draws must be at least 2.")
+
+    required = {"source", "plan", "step", "price", "created_at", "ended_at"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {', '.join(sorted(missing))}")
+
+    asof = pd.Timestamp(asof)
+    observed = df[
+        df["created_at"].notna() & (df["created_at"] <= asof)
+    ].copy()
+    columns = [
+        "source",
+        "forecast_ltv",
+        "ci_low",
+        "ci_high",
+        "n",
+        "max_observed_followup_months",
+        "extrapolation_months",
+    ]
+    if observed.empty:
+        return pd.DataFrame(columns=columns)
+
+    event = observed["ended_at"].notna() & (observed["ended_at"] <= asof)
+    observed_end = observed["ended_at"].where(event, asof)
+    observed["duration"] = (
+        (observed_end - observed["created_at"]).dt.days / 30.44
+    ).clip(lower=1 / 30.44)
+    observed["event"] = event.astype(int)
+
+    if (observed["step"] <= 0).any() or (observed["price"] < 0).any():
+        raise ValueError("Billing intervals must be positive and prices non-negative.")
+    if observed["event"].sum() < 2:
+        raise ValueError("The Weibull model requires at least two observed cancellations.")
+
+    formula_terms = []
+    if observed["source"].nunique() > 1:
+        formula_terms.append("C(source)")
+    if observed["plan"].nunique() > 1:
+        formula_terms.append("C(plan)")
+    if not formula_terms:
+        raise ValueError("The Weibull forecast requires variation in source or plan.")
+
+    model = WeibullAFTFitter(penalizer=penalizer)
+    model.fit(
+        observed[["duration", "event", "source", "plan"]],
+        duration_col="duration",
+        event_col="event",
+        formula=" + ".join(formula_terms),
+    )
+    parameter_names = list(model.params_.index)
+    parameters = model.params_.to_numpy(dtype=float)
+    covariance = model.variance_matrix_.loc[
+        parameter_names, parameter_names
+    ].to_numpy(dtype=float)
+    if not np.isfinite(parameters).all() or not np.isfinite(covariance).all():
+        raise ValueError("Weibull parameter uncertainty is unavailable.")
+    covariance = (covariance + covariance.T) / 2
+    rng = np.random.default_rng(random_state)
+    parameter_draws = rng.multivariate_normal(
+        parameters,
+        covariance,
+        size=n_parameter_draws,
+    )
+    lambda_names = [name for name in parameter_names if name[0] == "lambda_"]
+    rho_names = [name for name in parameter_names if name[0] == "rho_"]
+    lambda_positions = [parameter_names.index(name) for name in lambda_names]
+    rho_positions = [parameter_names.index(name) for name in rho_names]
+    source_draws = {}
+    source_points = {}
+    source_counts = {}
+    source_followup = {}
+
+    for (source, plan), group in observed.groupby(["source", "plan"], sort=True):
+        profile = pd.DataFrame({"source": [source], "plan": [plan]})
+        design = model.regressors.transform_df(profile).iloc[0]
+        lambda_design = design.loc["lambda_"].reindex(
+            [name[1] for name in lambda_names]
+        ).to_numpy(dtype=float)
+        rho_design = design.loc["rho_"].reindex(
+            [name[1] for name in rho_names]
+        ).to_numpy(dtype=float)
+        step = int(group["step"].mode().iloc[0])
+        price = float(group["price"].mean())
+        renewal_months = np.arange(step, int(horizon), step, dtype=float)
+
+        def expected_revenue(draws):
+            if renewal_months.size == 0:
+                return np.full(len(draws), price)
+            log_scale = draws[:, lambda_positions] @ lambda_design
+            log_shape = draws[:, rho_positions] @ rho_design
+            shape = np.exp(np.clip(log_shape, -50, 50))
+            log_hazard = shape[:, None] * (
+                np.log(renewal_months)[None, :] - log_scale[:, None]
+            )
+            survival = np.exp(-np.exp(np.clip(log_hazard, -745, 709)))
+            return price * (1 + survival.sum(axis=1))
+
+        point = expected_revenue(parameters[None, :])[0]
+        draws = expected_revenue(parameter_draws)
+        count = len(group)
+        source_draws[source] = source_draws.get(
+            source, np.zeros(n_parameter_draws)
+        ) + count * draws
+        source_points[source] = source_points.get(source, 0.0) + count * point
+        source_counts[source] = source_counts.get(source, 0) + count
+        source_followup[source] = min(
+            source_followup.get(source, float("inf")),
+            float(group["duration"].max()),
+        )
+
+    rows = []
+    for source in sorted(source_draws):
+        forecast = source_points[source] / source_counts[source]
+        combined_draws = source_draws[source] / source_counts[source]
+        ci_low, ci_high = np.quantile(
+            combined_draws,
+            [(1 - confidence) / 2, 1 - (1 - confidence) / 2],
+        )
+        max_observed = source_followup[source]
+        rows.append(
+            {
+                "source": source,
+                "forecast_ltv": forecast,
+                "ci_low": max(0.0, float(ci_low)),
+                "ci_high": float(ci_high),
+                "n": source_counts[source],
+                "max_observed_followup_months": max_observed,
+                "extrapolation_months": max(0.0, horizon - max_observed),
+            }
+        )
+
+    return pd.DataFrame(rows, columns=columns)
+
+
 def evaluate_survival_models(
     df,
     asof,
