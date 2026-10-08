@@ -418,11 +418,12 @@ if data is not None:
         st.stop()
 
     st.subheader("Your selected comparison")
-    scope_cols = st.columns(4)
-    scope_cols[0].metric("Subscriptions in scope", f"{len(filtered):,}")
-    scope_cols[1].metric("Sources shown", f"{filtered['source'].nunique():,}")
-    scope_cols[2].metric("Plan", plan_choice)
-    scope_cols[3].metric("Data included through", str(asof_ts.date()))
+    scope_first_row = st.columns(2)
+    scope_first_row[0].metric("Subscriptions in scope", f"{len(filtered):,}")
+    scope_first_row[1].metric("Sources shown", f"{filtered['source'].nunique():,}")
+    scope_second_row = st.columns(2)
+    scope_second_row[0].metric("Plan", plan_choice)
+    scope_second_row[1].metric("Data included through", str(asof_ts.date()))
     st.caption(
         f"Signup dates: {cohort_start} to {cohort_end}. Available revenue periods: "
         f"{', '.join(map(str, horizon_filter))} months."
