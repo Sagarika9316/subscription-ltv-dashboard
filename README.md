@@ -50,6 +50,12 @@ In the loaded dashboard, a row of section links connects the overview, source
 comparison, acquisition-cost and experiment tools, retention trends, forecasts,
 and forecast checks in one continuous app.
 
+For marketing use, the source-level action table combines observed revenue,
+uncertainty, eligible sample size, and entered acquisition cost. It suggests
+whether to verify cost inputs, gather more evidence, or consider a controlled
+test. It does not make automatic budget recommendations; illustrative CAC values
+are explicitly flagged.
+
 Available dials include acquisition source, plan, signup date range, as-of date,
 observed revenue horizon, forecast window (36/48/60 months), mean or median
 revenue, confidence level, minimum mature sample size, and optional CAC inputs.

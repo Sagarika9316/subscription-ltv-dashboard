@@ -24,7 +24,7 @@ from survival_models import (
     evaluate_survival_models_rolling,
     kaplan_meier_retention_curve,
 )
-from streamlit_app import compute_ltv_summary
+from streamlit_app import build_marketing_action_table, compute_ltv_summary
 from utils import (
     STATIC_CAC_BY_SOURCE,
     contribution_at,
@@ -266,6 +266,50 @@ def test_gross_ltv_cac_candidates_rank_conservatively_and_exclude_missing_costs(
 
     stricter = rank_gross_ltv_cac_candidates(summary, minimum_ratio=2.5)
     assert not stricter["passes_gross_screen"].any()
+
+
+def test_marketing_action_table_separates_test_candidates_uncertainty_and_missing_costs():
+    summary = pd.DataFrame(
+        {
+            "source": ["candidate", "uncertain", "below screen", "missing cost"],
+            "ltv": [200, 200, 80, 100],
+            "ci_low": [150, 90, 60, 80],
+            "ci_high": [240, 260, 100, 120],
+            "cac": [40, 40, 40, np.nan],
+            "n": [100, 50, 20, 10],
+        }
+    )
+
+    actions = build_marketing_action_table(
+        summary, minimum_ratio=2.5, currency="USD"
+    ).set_index("Source")
+
+    assert "controlled test" in actions.loc["candidate", "Marketing next step"]
+    assert "Uncertain" in actions.loc["uncertain", "Marketing next step"]
+    assert "Below the current" in actions.loc["below screen", "Marketing next step"]
+    assert "Add verified acquisition cost" in actions.loc[
+        "missing cost", "Marketing next step"
+    ]
+    assert actions.loc["missing cost", "Acquisition cost"] == "Not entered"
+
+
+def test_marketing_action_table_warns_when_cac_is_illustrative():
+    summary = pd.DataFrame(
+        {
+            "source": ["email"],
+            "ltv": [100],
+            "ci_low": [80],
+            "ci_high": [120],
+            "cac": [20],
+            "n": [100],
+        }
+    )
+
+    actions = build_marketing_action_table(
+        summary, minimum_ratio=1, currency="USD", illustrative_cac=True
+    )
+
+    assert "Replace example cost" in actions.loc[0, "Marketing next step"]
 
 
 def test_static_cac_assumptions_are_available_by_acquisition_source():

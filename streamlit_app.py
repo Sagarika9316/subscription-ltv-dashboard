@@ -160,6 +160,66 @@ def compute_ltv_summary(df, asof=ASOF, selected_horizons=None, statistic="mean")
     return res, ltv, paid
 
 
+def build_marketing_action_table(
+    source_summary,
+    minimum_ratio,
+    currency,
+    illustrative_cac=False,
+):
+    """Pair observed source results with conservative, non-causal next steps."""
+    ranked = rank_gross_ltv_cac_candidates(
+        source_summary, minimum_ratio=minimum_ratio
+    ).set_index("source")
+    rows = []
+    for row in source_summary.itertuples(index=False):
+        cac = getattr(row, "cac")
+        ratio = np.nan
+        next_step = ""
+        if illustrative_cac:
+            next_step = (
+                "Replace example cost with verified spend before prioritizing."
+            )
+        elif pd.isna(cac) or cac <= 0:
+            next_step = "Add verified acquisition cost to assess economics."
+        elif row.source in ranked.index:
+            ranked_row = ranked.loc[row.source]
+            ratio = ranked_row["lower_bound_gross_ltv_cac"]
+            if ranked_row["passes_gross_screen"]:
+                next_step = (
+                    "Candidate for a controlled test; not a budget-scale signal."
+                )
+            elif ranked_row["gross_ltv_cac"] >= minimum_ratio:
+                next_step = (
+                    "Uncertain: point estimate clears target, but its cautious "
+                    "range does not."
+                )
+            else:
+                next_step = (
+                    "Below the current gross-revenue screen; review costs and "
+                    "retention before deciding."
+                )
+        else:
+            next_step = "Check source data and cost inputs before prioritizing."
+
+        rows.append(
+            {
+                "Source": row.source,
+                "Revenue so far": row.ltv,
+                "Likely range (low)": row.ci_low,
+                "Likely range (high)": row.ci_high,
+                "Subscriptions included": row.n,
+                "Acquisition cost": (
+                    f"{cac:,.2f} {currency}"
+                    if pd.notna(cac) and cac > 0
+                    else "Not entered"
+                ),
+                "Cautious revenue-to-cost ratio": ratio,
+                "Marketing next step": next_step,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 st.title("Subscription value by source")
 st.caption(
     "See how much revenue subscriptions have generated so far, compare the sources, "
@@ -766,6 +826,38 @@ if data is not None:
     )
     candidates = rank_gross_ltv_cac_candidates(
         ltv_view.reset_index(), minimum_ratio=minimum_gross_ltv_cac
+    )
+    marketing_actions = build_marketing_action_table(
+        ltv_view.reset_index(),
+        minimum_ratio=minimum_gross_ltv_cac,
+        currency=df["currency"].iloc[0],
+        illustrative_cac=use_static_cac,
+    )
+    if use_static_cac:
+        st.warning(
+            "The acquisition costs below are illustrative examples. Use the table "
+            "to explore scenarios only; replace them with verified spend before "
+            "making a channel decision."
+        )
+    else:
+        st.caption(
+            "Use verified source-level acquisition costs. This guide suggests what "
+            "to investigate next; it does not recommend scaling spend."
+        )
+    st.dataframe(
+        marketing_actions,
+        hide_index=True,
+        width="stretch",
+        height=min(460, 38 * (len(marketing_actions) + 1)),
+        column_config={
+            "Revenue so far": st.column_config.NumberColumn(format="%.2f"),
+            "Likely range (low)": st.column_config.NumberColumn(format="%.2f"),
+            "Likely range (high)": st.column_config.NumberColumn(format="%.2f"),
+            "Subscriptions included": st.column_config.NumberColumn(format="%,.0f"),
+            "Cautious revenue-to-cost ratio": st.column_config.NumberColumn(
+                format="%.2fx"
+            ),
+        },
     )
     if candidates.empty:
         st.info(
