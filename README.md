@@ -37,6 +37,12 @@ better customer value. Detailed unit economics, retention, survival forecasts,
 and time-based model validation are shown separately. Forecast validation at a
 short horizon does not establish accuracy of the 60-month extrapolation.
 
+Available dials include acquisition source, plan, signup date range, as-of date,
+observed revenue horizon, forecast window (36/48/60 months), mean or median
+revenue, confidence level, minimum mature sample size, and optional CAC inputs.
+Only dimensions present in the uploaded data are offered; there are no geography,
+device, or demographic filters because those fields are not in the current CSV.
+
 ## Subscription billing fields
 
 For data-specific billing, include these columns in the CSV:

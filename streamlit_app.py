@@ -151,7 +151,12 @@ with st.sidebar:
             if plan_choice == "All"
             else [plan for plan in plan_options if plan.title() == plan_choice]
         )
-        source_filter = st.multiselect("Acquisition source", sorted(df["source"].dropna().unique().tolist()), default=sorted(df["source"].dropna().unique().tolist()))
+        source_filter = st.multiselect(
+            "Acquisition source",
+            sorted(df["source"].dropna().unique().tolist()),
+            default=sorted(df["source"].dropna().unique().tolist()),
+            help="Compare all sources or focus on selected channels/campaigns.",
+        )
         cohort_start_default = df["created_at"].min().date()
         cohort_end_default = df["created_at"].max().date()
         cohort_range = st.date_input(
@@ -159,6 +164,7 @@ with st.sidebar:
             value=(cohort_start_default, cohort_end_default),
             min_value=cohort_start_default,
             max_value=cohort_end_default,
+            help="Restrict the comparison to customers who signed up in this date range.",
         )
         cohort_start, cohort_end = cohort_range
         horizon_candidates = df[
@@ -178,21 +184,46 @@ with st.sidebar:
                 "Time horizon (months)",
                 options=horizon_filter,
                 value=selected_horizon,
+                help=(
+                    "Observed revenue includes only subscriptions old enough to reach "
+                    "this many months by the selected as-of date."
+                ),
             )
         else:
             h = None
+        forecast_horizon = st.select_slider(
+            "Forecast window (months)",
+            options=[36, 48, LONG_TERM_FORECAST_HORIZON],
+            value=LONG_TERM_FORECAST_HORIZON,
+            help=(
+                "Finite modeled revenue window. Longer windows extrapolate farther "
+                "beyond observed follow-up and are more assumption-dependent."
+            ),
+        )
         min_users = st.slider(
             "Minimum mature customers per source",
             min_value=1,
             max_value=1000,
             value=1,
+            help=(
+                "Hide sources below this mature sample size. This is a display "
+                "threshold, not a guarantee of statistical reliability."
+            ),
         )
-        metric_view = st.radio("Metric view", ["mean LTV", "median LTV"])
+        metric_view = st.radio(
+            "Summary statistic",
+            ["Mean revenue", "Median revenue"],
+            help=(
+                "Mean reflects all customer values; median is less affected by "
+                "unusually high or low customers."
+            ),
+        )
         confidence_level = st.select_slider(
             "Confidence interval",
             options=[0.90, 0.95, 0.99],
             value=0.95,
             format_func=lambda value: f"{value:.0%}",
+            help="Controls the width of the bootstrap interval around observed revenue.",
         )
         with st.expander("Acquisition costs (CAC)"):
             st.caption("Enter CAC per customer in the same currency as revenue. Unknown values stay blank.")
@@ -276,7 +307,7 @@ if data is not None:
         st.warning(f"No sources have at least {min_users} mature customers at {h} months.")
         st.stop()
 
-    statistic = "median" if metric_view == "median LTV" else "mean"
+    statistic = "median" if metric_view == "Median revenue" else "mean"
     res, ltv, paid = compute_ltv_summary(
         filtered,
         asof=asof_ts,
@@ -1069,12 +1100,6 @@ if data is not None:
             else:
                 st.bar_chart(aft_view["aft_ltv"].sort_values(ascending=False))
 
-    forecast_horizon = st.select_slider(
-        "Forecast window (months)",
-        options=[36, 48, LONG_TERM_FORECAST_HORIZON],
-        value=LONG_TERM_FORECAST_HORIZON,
-        help="Choose a finite revenue window. This is not an unlimited customer lifetime.",
-    )
     st.subheader(f"Expected gross revenue through month {forecast_horizon}")
     st.caption(
         "This is a source-level expected revenue estimate from one Weibull AFT model "
