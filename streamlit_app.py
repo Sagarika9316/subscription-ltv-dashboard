@@ -60,10 +60,40 @@ st.markdown(
         border-radius: 14px;
         padding: 0.85rem 1rem;
         box-shadow: 0 3px 12px rgba(34, 37, 43, 0.05);
+        min-width: 0;
     }
     [data-testid="stMetricLabel"] {
         color: #565a61;
         font-weight: 600;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        overflow-wrap: anywhere;
+        line-height: 1.3;
+    }
+    [data-testid="stMetricLabel"] * {
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        overflow-wrap: anywhere;
+    }
+    [data-testid="stMetricValue"] {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        font-size: clamp(1.35rem, 2.2vw, 2rem);
+        line-height: 1.2;
+    }
+    [data-testid="stMetricValue"] * {
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        font-size: clamp(1.35rem, 2.2vw, 2rem) !important;
+        line-height: 1.2;
     }
     [data-testid="stExpander"] {
         border: 1px solid rgba(34, 37, 43, 0.12);
@@ -707,20 +737,21 @@ if data is not None:
     else:
         candidate = candidates.iloc[0]
         passing_candidates = candidates[candidates["passes_gross_screen"]]
-        candidate_metrics = st.columns(5)
-        candidate_metrics[0].metric("Source to investigate first", candidate["source"])
-        candidate_metrics[1].metric(
+        candidate_first_row = st.columns(2)
+        candidate_first_row[0].metric("Source to investigate first", candidate["source"])
+        candidate_first_row[1].metric(
             "Entered acquisition cost per customer",
             f"{candidate['cac']:,.2f} {df['currency'].iloc[0]}",
         )
-        candidate_metrics[2].metric(
+        candidate_second_row = st.columns(2)
+        candidate_second_row[0].metric(
             "Revenue-to-cost ratio", f"{candidate['gross_ltv_cac']:.2f}x"
         )
-        candidate_metrics[3].metric(
+        candidate_second_row[1].metric(
             f"Cautious revenue-to-cost ratio ({confidence_level:.0%})",
             f"{candidate['lower_bound_gross_ltv_cac']:.2f}x",
         )
-        candidate_metrics[4].metric("Subscriptions compared", f"{int(candidate['n']):,}")
+        st.metric("Subscriptions compared", f"{int(candidate['n']):,}")
         st.caption(
             f"Observed payback at selected mature horizons: {candidate['payback'] or 'not reached'}. "
             "Ranking uses the lower confidence bound of gross LTV:CAC, with mature sample size as a tie-breaker."
@@ -1005,7 +1036,7 @@ if data is not None:
     )
 
     st.subheader("All-source snapshot")
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     mature_mask = mature_at(filtered, h, asof=asof_ts)
     mature_ltv = revenue_at(filtered, paid, h)[mature_mask]
     overall_ltv = mature_ltv.mean() if statistic == "mean" else np.median(mature_ltv)
@@ -1015,12 +1046,14 @@ if data is not None:
         f"{h}-month {summary_stat_label.lower()} gross revenue",
         f"{overall_ltv:,.2f} {df['currency'].iloc[0]}",
     )
-    col3.metric("Highest observed source", ltv_view.index[0] if not ltv_view.empty else "N/A")
+    st.caption(
+        f"Highest observed source: {ltv_view.index[0] if not ltv_view.empty else 'N/A'}"
+    )
 
     st.subheader("How observed revenue changes with time")
     horizon_table = res[
         (res["plan"] == "all") & res["H"].isin(available_horizons)
-    ].pivot(index="source", columns="H", values="ltv").round(1)
+    ].pivot(index="H", columns="source", values="ltv").sort_index().round(1)
     st.line_chart(
         horizon_table,
         y_label=f"Gross revenue ({df['currency'].iloc[0]})",
