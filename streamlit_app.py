@@ -1058,21 +1058,25 @@ if data is not None:
             else:
                 st.bar_chart(aft_view["aft_ltv"].sort_values(ascending=False))
 
-    st.subheader(
-        f"Long-term gross revenue forecast ({LONG_TERM_FORECAST_HORIZON} months)"
+    forecast_horizon = st.select_slider(
+        "Forecast window (months)",
+        options=[36, 48, LONG_TERM_FORECAST_HORIZON],
+        value=LONG_TERM_FORECAST_HORIZON,
+        help="Choose a finite revenue window. This is not an unlimited customer lifetime.",
     )
+    st.subheader(f"Expected gross revenue through month {forecast_horizon}")
     st.caption(
         "This is a source-level expected revenue estimate from one Weibull AFT model "
         "using source and plan as predictors, applied to each plan's billing schedule. "
-        "It is not an individual customer's prediction or an unlimited lifetime value. "
-        "The interval reflects model parameter "
-        "uncertainty; it does not include price, model-choice, or future-business uncertainty."
+        "It is a group average, not an individual prediction or a promise. The interval "
+        "reflects fitted-parameter uncertainty only; it does not include customer-to-customer "
+        "variation, model-choice uncertainty, price changes, or future business changes."
     )
     try:
         long_term_forecast = aft_long_term_revenue_forecast(
             filtered,
             asof=asof_ts,
-            horizon=LONG_TERM_FORECAST_HORIZON,
+            horizon=forecast_horizon,
             confidence=confidence_level,
         )
     except (ConvergenceError, ValueError) as error:
@@ -1087,9 +1091,9 @@ if data is not None:
             display_forecast = long_term_forecast.rename(
                 columns={
                     "source": "Source",
-                    "forecast_ltv": "60-month expected gross revenue",
-                    "ci_low": f"{confidence_level:.0%} model interval lower",
-                    "ci_high": f"{confidence_level:.0%} model interval upper",
+                    "forecast_ltv": f"{forecast_horizon}-month expected gross revenue",
+                    "ci_low": f"{confidence_level:.0%} parameter interval lower",
+                    "ci_high": f"{confidence_level:.0%} parameter interval upper",
                     "n": "Customers",
                     "max_observed_followup_months": "Shortest source/plan follow-up (months)",
                     "extrapolation_months": "Months extrapolated",
@@ -1101,16 +1105,42 @@ if data is not None:
             ]
             if not extrapolated.empty:
                 st.warning(
-                    "These 60-month estimates extrapolate beyond observed "
-                    "subscription follow-up. The farther beyond observed history, "
-                    "the more the result depends on the Weibull assumption."
+                    f"These {forecast_horizon}-month estimates extrapolate beyond "
+                    "observed subscription follow-up. The farther beyond observed "
+                    "history, the more the result depends on the Weibull assumption."
                 )
             st.caption(
                 f"Prices use the selected billing assumptions ({df['currency'].iloc[0]}). "
-                "The model interval is an approximate confidence interval for fitted "
-                "Weibull parameters, not a range guaranteed to contain an individual "
-                "customer's future revenue. Revenue excludes costs and discounts."
+                f"The parameter interval is not a prediction interval for individual "
+                f"customers. These estimates are gross revenue; acquisition costs, "
+                f"servicing costs, refunds, taxes, and discounting are excluded unless "
+                f"already reflected in the input prices."
             )
+
+    st.subheader("How to use this comparison")
+    st.markdown(
+        "1. **Check coverage:** use the mature-customer count and interval; narrow "
+        "source gaps are not proof of a real difference.\n"
+        "2. **Check the forecast:** compare it with validation at a shorter horizon. "
+        "A short-horizon validation does not validate this longer window.\n"
+        "3. **Check economics:** enter verified CAC and, if available, per-charge "
+        "contribution after variable costs. Example CAC values and gross revenue "
+        "are not profitability evidence.\n"
+        "4. **Check changes over time:** review signup cohorts and retention before "
+        "assuming past source performance will continue.\n"
+        "5. **Test before scaling:** historical channel comparisons are observational. "
+        "Use a controlled incrementality test to evaluate a budget or campaign change."
+    )
+    if not has_cac:
+        st.warning(
+            "No positive CAC is entered. The dashboard can compare revenue, but "
+            "cannot assess acquisition economics for this selection."
+        )
+    if not has_contribution:
+        st.info(
+            "Contribution costs are not included in this CSV. Revenue less CAC "
+            "still excludes servicing, payment, refund, tax, and other variable costs."
+        )
 
     with st.expander("Can the forecast predict later customers? (model validation)"):
         st.caption(
