@@ -557,6 +557,12 @@ def test_rolling_survival_evaluation_returns_non_overlapping_folds():
     assert len(folds) == 3
     assert folds["status"].eq("complete").all()
     assert folds["holdout_start"].is_monotonic_increasing
+    assert all(
+        (pd.Timestamp(next_start) - pd.Timestamp(previous_end)).days == 1
+        for previous_end, next_start in zip(
+            folds["holdout_end"], folds["holdout_start"].iloc[1:]
+        )
+    )
     assert folds["scored_n"].eq(48).all()
     assert folds["aft_mae"].notna().all()
     assert folds["aft_rmse"].notna().all()

@@ -594,13 +594,18 @@ def evaluate_survival_models_rolling(df, asof, horizon, n_folds=3):
 
     asof = pd.Timestamp(asof)
     latest_end = asof - pd.DateOffset(months=horizon) + pd.DateOffset(days=1)
-    rows = []
-    for fold_index in range(n_folds):
-        periods_back = n_folds - fold_index - 1
-        holdout_end = latest_end - pd.DateOffset(months=periods_back * horizon)
+
+    windows = []
+    holdout_end = latest_end
+    for _ in range(n_folds):
         holdout_start = (
             holdout_end - pd.DateOffset(months=horizon) + pd.DateOffset(days=1)
         )
+        windows.append((holdout_start, holdout_end))
+        holdout_end = holdout_start - pd.DateOffset(days=1)
+
+    rows = []
+    for fold_index, (holdout_start, holdout_end) in enumerate(reversed(windows)):
         row = {
             "fold": fold_index + 1,
             "holdout_start": holdout_start,

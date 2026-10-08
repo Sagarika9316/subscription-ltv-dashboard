@@ -77,18 +77,33 @@ def compute_ltv_summary(df, asof=ASOF, selected_horizons=None, statistic="mean")
     return res, ltv, paid
 
 
-st.title("Lifetime Value by Acquisition Source")
-st.caption("Compare LTV across acquisition sources, plan types, and time horizons for a subscription business.")
+st.title("Subscription value by acquisition source")
+st.caption(
+    "Compare the revenue customers have generated so far, see how many customers "
+    "support each comparison, and explore clearly labeled retention forecasts."
+)
+with st.expander("A quick guide: what these numbers mean"):
+    st.markdown(
+        "- **Observed revenue** is what customers generated within the selected "
+        "time window. It is not unlimited lifetime value.\n"
+        "- **Mature customers** have had enough time to reach that window. Newer "
+        "customers are excluded from the observed comparison.\n"
+        "- **Forecast revenue** estimates future scheduled charges from historical "
+        "cancellation patterns; it is not money already received.\n"
+        "- **Gross revenue is not profit.** It does not subtract marketing or "
+        "servicing costs. CAC must be entered separately for a cost comparison.\n"
+        "- Results use the prices shown in the billing assumptions. Missing billing "
+        "prices default to $15 monthly and $150 annually.\n"
+        "- A confidence interval summarizes uncertainty in a source-level estimate; "
+        "it is not a guarantee about an individual customer."
+    )
 
 with st.sidebar:
     st.header("Controls")
     st.markdown(
-        "**Observed LTV + interval**  \n"
-        "How much revenue did mature customers generate by this horizon, and how uncertain is the estimate?\n\n"
-        "**CAC + payback**  \n"
-        "How much LTV per acquisition dollar, and when does observed revenue cover CAC?\n\n"
-        "**Retention forecast**  \n"
-        "What cumulative revenue might historical retention imply through the selected horizon?"
+        "Start by uploading the subscription CSV. Then choose a plan, source, signup "
+        "period, and measurement horizon. The main comparison uses only customers "
+        "who have reached that horizon."
     )
     uploaded_file = st.file_uploader("Upload subscriptions CSV", type=["csv"])
     if uploaded_file is not None:
@@ -218,6 +233,13 @@ with st.sidebar:
                 },
             )
 
+if data is None:
+    st.info(
+        "To begin, upload your subscriptions CSV in the sidebar. It needs a plan, "
+        "signup date, end date and end reason, plus an acquisition source or channel. "
+        "For public deployments, upload only data you are permitted to share."
+    )
+
 if data is not None:
     cohort_start, cohort_end = cohort_range
     filtered = df[
@@ -260,15 +282,16 @@ if data is not None:
         st.warning("No subscribers in this signup cohort have reached the selected time horizons yet.")
         st.stop()
 
-    st.subheader("Filter summary")
-    st.json({
-        "rows": len(filtered),
-        "plans": sorted(filtered["plan"].unique().tolist()),
-        "sources": sorted(filtered["source"].unique().tolist()),
-        "signup_cohort": [str(cohort_start), str(cohort_end)],
-        "horizons_with_mature_data": available_horizons,
-        "as_of": str(asof_ts.date()),
-    })
+    st.subheader("Your current comparison")
+    scope_cols = st.columns(4)
+    scope_cols[0].metric("Subscriptions in scope", f"{len(filtered):,}")
+    scope_cols[1].metric("Sources shown", f"{filtered['source'].nunique():,}")
+    scope_cols[2].metric("Plan", plan_choice)
+    scope_cols[3].metric("Data considered through", str(asof_ts.date()))
+    st.caption(
+        f"Signup dates: {cohort_start} to {cohort_end}. Mature-data horizons "
+        f"available for this selection: {', '.join(map(str, horizon_filter))} months."
+    )
 
     if h not in available_horizons:
         st.warning("The selected horizon is not supported by the filtered customer data.")
@@ -377,7 +400,55 @@ if data is not None:
             aft_view[["aft_ltv", "n"]].rename(columns={"n": "aft_n"})
         )
 
-    st.subheader(f"Model comparison at {h} {horizon_unit}")
+    st.header("What the data says")
+    st.caption(
+        f"Observed gross revenue per mature subscription through {h} "
+        f"{horizon_unit}; values are in {df['currency'].iloc[0]}."
+    )
+    leader = ltv_view.iloc[0]
+    leader_source = ltv_view.index[0]
+    mature_total = int(ltv_view["n"].sum())
+    headline_cols = st.columns(3)
+    headline_cols[0].metric(
+        f"Highest observed {h}-month revenue",
+        leader_source,
+        help="This is the source with the highest selected mean or median among mature customers.",
+    )
+    statistic_label = "Mean" if statistic == "mean" else "Median"
+    headline_cols[1].metric(
+        f"{statistic_label} per mature customer",
+        f"{leader['ltv']:,.2f} {df['currency'].iloc[0]}",
+        help=f"{confidence_level:.0%} bootstrap interval: "
+        f"{leader['ci_low']:,.2f}–{leader['ci_high']:,.2f} {df['currency'].iloc[0]}.",
+    )
+    headline_cols[2].metric("Mature subscriptions compared", f"{mature_total:,}")
+    st.markdown(
+        f"**How to read this:** {leader_source} ranks highest for this filter and "
+        f"horizon. The estimate uses {int(leader['n']):,} mature subscriptions; its "
+        f"{confidence_level:.0%} bootstrap interval is "
+        f"{leader['ci_low']:,.2f}–{leader['ci_high']:,.2f} "
+        f"{df['currency'].iloc[0]}. This is an association in historical data, not "
+        "proof that the source caused higher value or that increasing its budget will work."
+    )
+    if len(ltv_view) > 1:
+        runner_up = ltv_view.iloc[1]
+        if leader["ci_low"] <= runner_up["ci_high"]:
+            st.info(
+                f"The top source's interval overlaps the next-ranked source "
+                f"({ltv_view.index[1]}). Treat the ranking as uncertain rather than "
+                "assuming the leader is definitively better."
+            )
+    st.caption(
+        "Observed revenue uses only subscriptions old enough to reach the selected "
+        "horizon. It excludes costs and future charges."
+    )
+
+    st.subheader(f"Detailed results at {h} {horizon_unit}")
+    st.caption(
+        "Observed revenue uses mature customers. Forecast columns estimate future "
+        "gross revenue from retention patterns. All money values are in "
+        f"{df['currency'].iloc[0]}."
+    )
     comparison = ltv_view[
         [
             "ltv",
@@ -400,29 +471,64 @@ if data is not None:
         ]
     ].rename(
         columns={
-            "ltv": "Observed LTV",
+            "ltv": "Observed gross revenue",
             "ci_low": f"{confidence_level:.0%} CI lower",
             "ci_high": f"{confidence_level:.0%} CI upper",
             "n": "Observed N",
             "cac": "CAC",
             "ltv_cac": "LTV:CAC",
             "ltv_minus_cac": "LTV - CAC",
-            "payback": "Observed payback",
+            "payback": "Mean-revenue payback",
             "contribution_ltv": "Contribution LTV",
             "contribution_minus_cac": "Contribution - CAC",
             "contribution_ltv_cac": "Contribution:CAC",
-            "forecast_ltv": "Kaplan–Meier LTV",
+            "forecast_ltv": "Kaplan–Meier forecast",
             "forecast_n": "KM N",
-            "cox_ltv": "Cox PH LTV",
+            "cox_ltv": "Cox PH forecast",
             "cox_n": "Cox N",
-            "aft_ltv": "Weibull AFT LTV",
+            "aft_ltv": "Weibull AFT forecast",
             "aft_n": "AFT N",
         }
     )
-    st.dataframe(comparison, width="stretch")
-    st.caption("Blank CAC columns mean no positive CAC has been entered. Blank forecast cells mean one or more plan segments lack sufficient follow-up.")
+    comparison_config = {
+        column: st.column_config.NumberColumn(format="%.2f")
+        for column in (
+            "Observed gross revenue",
+            f"{confidence_level:.0%} CI lower",
+            f"{confidence_level:.0%} CI upper",
+            "CAC",
+            "LTV:CAC",
+            "LTV - CAC",
+            "Contribution LTV",
+            "Contribution - CAC",
+            "Contribution:CAC",
+            "Kaplan–Meier forecast",
+            "Cox PH forecast",
+            "Weibull AFT forecast",
+        )
+    }
+    comparison_config.update(
+        {
+            "Observed N": st.column_config.NumberColumn(format="%.0f"),
+            "KM N": st.column_config.NumberColumn(format="%.0f"),
+            "Cox N": st.column_config.NumberColumn(format="%.0f"),
+            "AFT N": st.column_config.NumberColumn(format="%.0f"),
+            "LTV:CAC": st.column_config.NumberColumn(format="%.2fx"),
+            "Contribution:CAC": st.column_config.NumberColumn(format="%.2fx"),
+        }
+    )
+    st.dataframe(comparison, width="stretch", column_config=comparison_config)
+    st.caption(
+        "LTV:CAC is a ratio: 1.00x means selected-horizon gross revenue equals "
+        "entered customer acquisition cost. It does not mean the customer is profitable."
+    )
+    st.caption(
+        "Money values use the selected billing currency. Blank CAC values mean no "
+        "positive CAC was entered. A blank forecast means a plan segment lacks "
+        "required follow-up. Payback is based on mean observed revenue."
+    )
 
-    st.subheader("Candidate for a controlled investment test")
+    st.subheader("Marketing check: which source merits a test?")
     minimum_gross_ltv_cac = st.number_input(
         "Minimum lower-bound gross LTV:CAC for test screen",
         min_value=0.1,
@@ -442,8 +548,11 @@ if data is not None:
         candidate = candidates.iloc[0]
         passing_candidates = candidates[candidates["passes_gross_screen"]]
         candidate_metrics = st.columns(5)
-        candidate_metrics[0].metric("Top conservative candidate", candidate["source"])
-        candidate_metrics[1].metric("Entered CAC", f"{candidate['cac']:,.2f}")
+        candidate_metrics[0].metric("Top-ranked source to investigate", candidate["source"])
+        candidate_metrics[1].metric(
+            "Entered CAC per customer",
+            f"{candidate['cac']:,.2f} {df['currency'].iloc[0]}",
+        )
         candidate_metrics[2].metric(
             "Observed gross LTV:CAC", f"{candidate['gross_ltv_cac']:.2f}x"
         )
@@ -472,13 +581,7 @@ if data is not None:
             "The default 1.0x threshold only means gross LTV covers CAC; it excludes service costs, refunds, and other costs."
         )
 
-    st.subheader("Business readout for the current filters")
-    ltv_leader = ltv_view.iloc[0]
-    st.markdown(
-        f"**Which source leads on {h}-month gross LTV?** {ltv_view.index[0]} "
-        f"({metric_view}, {ltv_leader['ltv']:,.2f}; {int(ltv_leader['n']):,} mature customers; "
-        f"{confidence_level:.0%} interval {ltv_leader['ci_low']:,.2f}–{ltv_leader['ci_high']:,.2f})."
-    )
+    st.subheader("Does observed revenue cover acquisition cost?")
     if not has_cac:
         cac_answer = "CAC comparison is unavailable because no positive CAC values are entered."
     elif candidates.empty:
@@ -500,9 +603,10 @@ if data is not None:
         )
     st.markdown(f"**Does any source clear the CAC screen?** {cac_answer}")
     st.info(
-        "Does this prove we should increase spend? No. This dataset has no randomized treatment/control "
-        "outcomes or verified contribution costs. Use the candidate to design a controlled test; do not treat "
-        "gross LTV:CAC as net profit or causal lift."
+        "A revenue-to-CAC screen is not a budget recommendation. This subscription "
+        "file does not contain randomized treatment/control outcomes or verified "
+        "contribution costs. Use a promising source as a test hypothesis, not proof "
+        "that increasing spend will be profitable."
     )
 
     with st.expander("Plan an incrementality experiment"):
@@ -682,74 +786,92 @@ if data is not None:
             "'net_contribution_per_charge' column. Supply per-charge revenue after variable costs and allocated refunds; no zero-cost assumption is made."
         )
 
-    st.markdown("**Model assumptions and sample coverage**")
-    observed_notes, economics_notes, km_notes, cox_notes, aft_notes = st.columns(5)
-    observed_notes.caption(
-        f"Observed LTV uses fully mature customers at {h} months; interval is bootstrap-based. Observed N is shown per source."
-    )
-    economics_notes.caption(
-        "LTV:CAC uses entered source-level costs. Payback is the first selected mature horizon where mean observed revenue covers CAC."
-    )
-    km_notes.caption(
-        "Kaplan–Meier is the non-parametric retention baseline. Its forecast is not realized LTV."
-    )
-    cox_notes.caption(
-        "Cox PH adjusts for source and plan; assumes proportional hazards. Associations are not causal effects."
-    )
-    aft_notes.caption(
-        "Weibull AFT models event time with a Weibull distribution; this is a gross-revenue forecast."
-    )
+    with st.expander("Model notes and limitations"):
+        st.markdown(
+            "- **Observed comparison:** includes only customers old enough to reach "
+            f"the selected {h}-month checkpoint. The interval is bootstrap-based.\n"
+            "- **Kaplan–Meier:** estimates retention over time; subscriptions still "
+            "active at the as-of date count as active through their last observed date.\n"
+            "- **Cox proportional hazards:** compares cancellation patterns by "
+            "source and plan; assumes relative risks are proportional over time.\n"
+            "- **Weibull AFT:** extrapolates subscription duration using a Weibull "
+            "distribution. Long-range estimates depend on that assumption.\n"
+            "- **All source comparisons are observational.** They do not show that "
+            "the acquisition source caused a difference in customer value.\n"
+            "- Gross revenue excludes acquisition costs, servicing costs, refunds, "
+            "and taxes unless already represented in the input prices."
+        )
 
     ltv_chart, net_chart, contribution_chart = st.columns(3)
     with ltv_chart:
-        st.subheader("Observed LTV by source")
-        st.bar_chart(ltv_view["ltv"].sort_values(ascending=False))
+        st.subheader("Observed gross revenue by source")
+        st.bar_chart(
+            ltv_view["ltv"].sort_values(ascending=False),
+            y_label=f"Gross revenue ({df['currency'].iloc[0]})",
+        )
     with net_chart:
-        st.subheader("LTV - CAC by source")
+        st.subheader("Observed revenue minus CAC")
         net_ltv = ltv_view["ltv_minus_cac"].dropna().sort_values(ascending=False)
         if net_ltv.empty:
             st.info("Enter CAC values to compare LTV less acquisition cost.")
         else:
-            st.bar_chart(net_ltv)
-        st.caption("Revenue less acquisition cost; excludes servicing and other costs.")
+            st.bar_chart(
+                net_ltv,
+                y_label=f"Revenue less CAC ({df['currency'].iloc[0]})",
+            )
+        st.caption(
+            "Observed gross revenue less entered CAC. This is not profit; servicing "
+            "and other costs are excluded."
+        )
     with contribution_chart:
-        st.subheader("Contribution LTV by source")
+        st.subheader("Contribution value by source")
         if has_contribution:
-            st.bar_chart(ltv_view["contribution_ltv"].dropna().sort_values(ascending=False))
+            st.bar_chart(
+                ltv_view["contribution_ltv"].dropna().sort_values(ascending=False),
+                y_label=f"Contribution ({df['currency'].iloc[0]})",
+            )
         else:
-            st.info("Add net contribution per charge to compare sources.")
+            st.info(
+                "Contribution data is not in this CSV, so this chart is unavailable. "
+                "Gross revenue should not be treated as profit."
+            )
 
-    st.subheader("Detailed LTV table")
+    st.subheader("Observed revenue by source and plan")
     detail = res[(res["H"] == h)].pivot(index="source", columns="plan", values="ltv").round(2)
     st.dataframe(detail, width="stretch")
+    st.caption(
+        f"Each value is {statistic_label.lower()} gross revenue per mature subscription "
+        f"through month {h}, in {df['currency'].iloc[0]}."
+    )
 
-    st.subheader("Summary metrics")
+    st.subheader("All-source snapshot")
     col1, col2, col3 = st.columns(3)
     mature_mask = mature_at(filtered, h, asof=asof_ts)
     mature_ltv = revenue_at(filtered, paid, h)[mature_mask]
     overall_ltv = mature_ltv.mean() if statistic == "mean" else np.median(mature_ltv)
     summary_stat_label = "Mean" if statistic == "mean" else "Median"
-    col1.metric("Mature subscribers", f"{len(mature_ltv):,}")
+    col1.metric("Mature subscriptions", f"{len(mature_ltv):,}")
     col2.metric(
-        f"{h}-month {summary_stat_label.lower()} LTV",
-        round(float(overall_ltv), 2),
+        f"{h}-month {summary_stat_label.lower()} gross revenue",
+        f"{overall_ltv:,.2f} {df['currency'].iloc[0]}",
     )
-    col3.metric("Largest source", ltv_view.index[0] if not ltv_view.empty else "N/A")
+    col3.metric("Highest observed source", ltv_view.index[0] if not ltv_view.empty else "N/A")
 
-    st.markdown(
-        "This dashboard compares expected customer lifetime value by acquisition source under the current monthly/annual subscription assumptions."
-    )
-
-    st.subheader("Observed LTV trajectory")
+    st.subheader("How observed revenue changes with time")
     horizon_table = res[
         (res["plan"] == "all") & res["H"].isin(available_horizons)
     ].pivot(index="source", columns="H", values="ltv").round(1)
-    st.line_chart(horizon_table)
+    st.line_chart(
+        horizon_table,
+        y_label=f"Gross revenue ({df['currency'].iloc[0]})",
+        x_label="Months after signup",
+    )
 
     with st.expander("Retention and churn curves by source and plan"):
         st.caption(
-            "Kaplan–Meier estimates the share still subscribed over customer age. Active subscriptions are right-censored "
-            "at the as-of date, not counted as churn. Curves stop when fewer than the minimum selected customers remain at risk."
+            "The curve estimates the share still subscribed as months pass after signup. "
+            "Customers still active are counted as active through the last date observed, "
+            "not treated as cancellations. Curves stop when too few customers remain under observation."
         )
         curve_metric = st.radio(
             "Curve metric",
@@ -819,8 +941,9 @@ if data is not None:
 
     with st.expander("Cohort retention matrix"):
         st.caption(
-            "Each row is a signup-month/source/plan cohort. Cells show the share retained at each customer age; "
-            "ages without enough observed customers are left blank."
+            "Each row groups customers who signed up in the same month, source, and plan. "
+            "Each cell shows the share still subscribed at that many months after signup. "
+            "Blank cells mean not enough customers have been observed for that long."
         )
         cohort_data = df[
             df["source"].isin(source_filter)
@@ -907,8 +1030,8 @@ if data is not None:
     st.divider()
     st.subheader("Survival model forecasts")
     st.caption(
-        "All three models use right-censored subscription durations and observed billing prices. "
-        "Forecasts are gross-revenue estimates, not realized LTV."
+        "These are model-based gross-revenue estimates, not realized revenue and "
+        "not unlimited lifetime value. Compare them with the out-of-time validation below."
     )
     forecast_view = forecast_view.sort_values("forecast_ltv", ascending=False)
     if forecast_view.empty:
@@ -989,13 +1112,16 @@ if data is not None:
                 "customer's future revenue. Revenue excludes costs and discounts."
             )
 
-    with st.expander("Out-of-time model validation"):
+    with st.expander("Can the forecast predict later customers? (model validation)"):
         st.caption(
-            "Trains on earlier signup cohorts and scores a later, fully mature holdout. "
+            "Trains on earlier signups, then checks its predictions against a later group "
+            "whose selected measurement period has fully elapsed. "
             "Uses selected sources and plans, but the cohort-date filter is intentionally not applied. "
             "Compares Kaplan–Meier, Cox PH, and Weibull AFT on the same customers. "
             "Cox assumes proportional hazards; Weibull AFT assumes Weibull event times. "
-            "MAE and RMSE are in gross-revenue units; lower is better."
+            "MAE is the average absolute prediction error. RMSE penalizes large misses more. "
+            "Both are in gross-revenue units; lower is better. A short-horizon test does not "
+            "validate a 60-month forecast."
         )
         validation_horizon = st.select_slider(
             "Validation horizon (months)",
@@ -1070,16 +1196,16 @@ if data is not None:
                 km_metrics, cox_metrics, aft_metrics = st.columns(3)
                 with km_metrics:
                     st.markdown("**Kaplan–Meier baseline**")
-                    st.metric("MAE", f"{validation_summary['km_mae']:,.2f}")
-                    st.metric("RMSE", f"{validation_summary['km_rmse']:,.2f}")
+                    st.metric("Typical error (MAE)", f"{validation_summary['km_mae']:,.2f}")
+                    st.metric("Large-error-sensitive score (RMSE)", f"{validation_summary['km_rmse']:,.2f}")
                 with cox_metrics:
                     st.markdown("**Cox proportional hazards**")
-                    st.metric("MAE", f"{validation_summary['cox_mae']:,.2f}")
-                    st.metric("RMSE", f"{validation_summary['cox_rmse']:,.2f}")
+                    st.metric("Typical error (MAE)", f"{validation_summary['cox_mae']:,.2f}")
+                    st.metric("Large-error-sensitive score (RMSE)", f"{validation_summary['cox_rmse']:,.2f}")
                 with aft_metrics:
                     st.markdown("**Weibull AFT**")
-                    st.metric("MAE", f"{validation_summary['aft_mae']:,.2f}")
-                    st.metric("RMSE", f"{validation_summary['aft_rmse']:,.2f}")
+                    st.metric("Typical error (MAE)", f"{validation_summary['aft_mae']:,.2f}")
+                    st.metric("Large-error-sensitive score (RMSE)", f"{validation_summary['aft_rmse']:,.2f}")
 
                 cox_delta, aft_delta = st.columns(2)
                 cox_delta.metric(

@@ -30,6 +30,13 @@ observed follow-up and flags estimates that extrapolate beyond it. This is a
 source-level group estimate, not an individual customer's unlimited lifetime
 value or a profit estimate.
 
+The dashboard's first section is a plain-language readout for the active filters:
+the highest observed source, its mature sample size, and its bootstrap interval.
+Use it as a descriptive comparison, not proof that a marketing channel caused
+better customer value. Detailed unit economics, retention, survival forecasts,
+and time-based model validation are shown separately. Forecast validation at a
+short horizon does not establish accuracy of the 60-month extrapolation.
+
 ## Subscription billing fields
 
 For data-specific billing, include these columns in the CSV:
